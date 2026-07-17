@@ -61,10 +61,11 @@ no hosted server, no account, no installer, no admin rights required.
   Finance News** page in a new tab (e.g. `finance.yahoo.com/quote/LHX/news/`).
 - A "Refresh Data" button that re-downloads the latest public data on
   demand.
-- **Double-click to start, bookmarkable address**: `start.sh` (Linux) /
-  `start.bat` (Windows) launch the app on a fixed local address and open it
-  in your regular web browser, so you can bookmark it for one-click access
-  from then on. See "Starting the app" below.
+- **Double-click to start, bookmarkable address**: `start.command` (macOS) /
+  `start.sh` (Linux) / `start.bat` (Windows) launch the app on a fixed
+  local address and open it in your regular web browser, so you can
+  bookmark it for one-click access from then on. See "Starting the app"
+  below.
 - **All downloaded data is cached locally** in a single portable
   `data/politicians.db` file next to wherever you run the app -- close and
   reopen the app and your data is right there instantly, no re-download
@@ -229,10 +230,11 @@ that means in practice:
 
 ## Starting the app
 
-Double-click **`start.sh`** (Linux) or **`start.bat`** (Windows) in this
-folder. That's it -- it works whether or not you've already built the
-standalone executable (see below): it prefers `dist/PoliticianTradesTracker/`
-if present, and otherwise runs from source with Python automatically.
+Double-click **`start.command`** (macOS), **`start.sh`** (Linux), or
+**`start.bat`** (Windows) in this folder. That's it -- it works whether or
+not you've already built the standalone executable (see below): it prefers
+the prebuilt `dist/` app if present, and otherwise runs from source with
+Python automatically.
 
 This is safe to double-click any number of times:
 
@@ -261,6 +263,14 @@ manager.
 > executable bit set first -- right-click it, check Properties/Permissions
 > for "Allow executing file as program", or run `chmod +x start.sh` once
 > from a terminal. After that, double-clicking works normally.
+
+> **macOS troubleshooting:** double-clicking a `.command` file normally
+> just works (Finder opens it in Terminal automatically). If Gatekeeper
+> blocks it as from an "unidentified developer", right-click (or
+> Control-click) `start.command` and choose **Open** once, then confirm --
+> after that it opens normally on future double-clicks. The same applies to
+> the standalone `PoliticianTradesTracker.app` if you build it (see
+> below): right-click it and choose **Open** the first time.
 
 ## How it works (architecture)
 
@@ -308,13 +318,35 @@ pip install -r requirements.txt
 python run.py
 ```
 
-This opens your browser to the app the same way `start.sh`/`start.bat`
-does (see "Starting the app" above) -- on first launch it automatically
-downloads the initial dataset in the background (takes roughly 30-90
-seconds depending on your connection), or you can click **Refresh Data**
-yourself at any time.
+This opens your browser to the app the same way `start.command`/`start.sh`/
+`start.bat` does (see "Starting the app" above) -- on first launch it
+automatically downloads the initial dataset in the background (takes
+roughly 30-90 seconds depending on your connection), or you can click
+**Refresh Data** yourself at any time.
 
 ## Building a standalone, no-install executable
+
+### macOS
+
+```bash
+pip install -r requirements.txt
+pyinstaller packaging/macos.spec
+```
+
+Output: `dist/PoliticianTradesTracker.app`, a standard macOS app bundle.
+Copy the whole project folder (including this `dist/` subfolder and
+`start.command`) anywhere -- another Mac, an external drive -- and
+double-click `start.command` (or open the `.app` directly). No installer,
+no admin rights required.
+
+Since the app isn't code-signed/notarized with an Apple Developer
+certificate, macOS Gatekeeper will block the first launch as being from an
+"unidentified developer" -- right-click (Control-click)
+`PoliticianTradesTracker.app` and choose **Open** once, confirm, and it
+opens normally on every subsequent launch (including via `start.command`).
+Build on an actual Mac -- PyInstaller does not cross-compile, and Intel
+vs. Apple Silicon builds are only guaranteed to run on the architecture
+they were built on (build on each if you need to support both).
 
 ### Windows
 
@@ -349,6 +381,7 @@ cross-compile).
 
 ```
 politician-trades-app/
+├── start.command           # <-- double-click this on macOS to launch the app
 ├── start.sh                # <-- double-click this on Linux to launch the app
 ├── start.bat               # <-- double-click this on Windows to launch the app
 ├── run.py                 # dev entry point (python run.py)
@@ -382,6 +415,7 @@ politician-trades-app/
 │   ├── app.js
 │   └── vendor/chart.min.js  # Chart.js, vendored locally (no CDN)
 ├── packaging/
+│   ├── macos.spec           # PyInstaller spec for macOS
 │   ├── windows.spec         # PyInstaller spec for Windows
 │   └── linux.spec           # PyInstaller spec for Linux
 └── data/                    # created at runtime (gitignored)

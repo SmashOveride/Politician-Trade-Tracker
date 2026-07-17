@@ -14,8 +14,21 @@ from contextlib import contextmanager
 # next to the executable so users can see/back up their data; during normal
 # `python run.py` development it just lives in the project's data/ folder.
 def get_data_dir():
-    if getattr(__import__("sys"), "frozen", False):
-        base = os.path.dirname(__import__("sys").executable)
+    import sys
+
+    if getattr(sys, "frozen", False):
+        base = os.path.dirname(sys.executable)
+        # On macOS the frozen executable lives inside
+        # PoliticianTradesTracker.app/Contents/MacOS/, several levels deep
+        # inside the (normally opaque) app bundle. Walk up to the folder
+        # containing the .app itself so data/ is a plain, visible sibling
+        # folder there instead -- matching the Windows/Linux folder builds,
+        # where data/ sits directly next to the visible executable.
+        macos_contents_dir = os.path.join("Contents", "MacOS")
+        if base.replace("/", os.sep).endswith(macos_contents_dir):
+            app_bundle_dir = os.path.dirname(os.path.dirname(base))
+            if app_bundle_dir.endswith(".app"):
+                base = os.path.dirname(app_bundle_dir)
     else:
         base = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     data_dir = os.path.join(base, "data")
