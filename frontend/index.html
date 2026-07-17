@@ -1,0 +1,330 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Politician Trades Tracker</title>
+<link rel="stylesheet" href="/style.css" />
+</head>
+<body>
+
+  <!-- ============ HEADER (present on all views) ============ -->
+  <!-- All top-of-page buttons (nav links, notifications, theme toggle,
+       settings, refresh data) live in this single row so they line up on
+       one horizontal line and share the same .btn sizing -- see the .btn /
+       .nav-link rules in style.css. -->
+  <header class="app-header">
+    <div class="app-header__left">
+      <h1 class="app-title">Politician&nbsp;Trades&nbsp;Tracker</h1>
+    </div>
+
+    <nav class="app-nav" aria-label="Primary">
+      <button class="btn btn-secondary nav-link" data-route="#/recent">Recent Trades</button>
+      <button class="btn btn-secondary nav-link" data-route="#/politicians">Politicians</button>
+      <button class="btn btn-secondary nav-link" data-route="#/stocks">Stocks</button>
+      <div class="notifications-dropdown">
+        <button id="notifications-btn" class="btn btn-secondary nav-link notifications-btn" title="Notifications" aria-haspopup="true" aria-expanded="false">
+          Notifications
+          <span id="notifications-badge" class="notifications-badge hidden">0</span>
+        </button>
+        <div id="notifications-menu" class="notifications-menu hidden">
+          <div class="notifications-menu__header">Notifications</div>
+          <div id="notifications-list" class="notifications-list">
+            <p class="loading-text">Loading…</p>
+          </div>
+        </div>
+      </div>
+    </nav>
+
+    <div class="app-header__center global-search-wrap">
+      <input
+        type="search"
+        id="global-search"
+        class="global-search"
+        placeholder="Search politicians, tickers, or companies…"
+        aria-label="Search politicians, tickers, or companies"
+        autocomplete="off"
+      />
+      <div id="global-search-results" class="global-search-results hidden"></div>
+    </div>
+
+    <div class="app-header__right">
+      <!-- Hidden (not removed) so app.js's updateMeta() can keep setting its
+           text without needing a null-check; simply not shown to the user. -->
+      <span id="legislator-source" class="last-updated hidden"></span>
+      <button id="theme-toggle-btn" class="btn btn-secondary" title="Switch between light and dark mode">
+        <span id="theme-toggle-icon">🌙</span>
+        <span id="theme-toggle-label">Dark Mode</span>
+      </button>
+      <div class="settings-dropdown">
+        <button id="settings-btn" class="btn btn-secondary" title="Data source settings" aria-haspopup="true" aria-expanded="false">
+          Settings
+          <span class="settings-caret">&#9662;</span>
+        </button>
+        <div id="settings-menu" class="settings-menu hidden">
+          <button id="settings-menu-apis" class="settings-menu-item">APIs</button>
+          <button id="settings-menu-restart" class="settings-menu-item">Restart Server</button>
+          <button id="settings-menu-shutdown" class="settings-menu-item settings-menu-item-danger">Shut Down Server</button>
+        </div>
+      </div>
+      <div class="refresh-group">
+        <div class="refresh-controls">
+          <button id="refresh-btn" class="btn btn-primary">
+            <span id="refresh-spinner" class="spinner hidden"></span>
+            <span id="refresh-btn-label">Refresh Data</span>
+          </button>
+          <div class="refresh-range-dropdown">
+            <button id="refresh-range-btn" class="btn btn-secondary refresh-range-btn" title="More refresh options: status, custom date range, stop refresh, clear all data" aria-haspopup="true" aria-expanded="false">
+              <span class="settings-caret">&#9662;</span>
+            </button>
+            <div id="refresh-range-menu" class="refresh-range-menu hidden">
+              <span id="last-updated" class="last-updated refresh-range-status">Loading…</span>
+              <hr class="refresh-range-divider" />
+              <p class="refresh-range-desc">
+                By default, Refresh Data pulls trades from the last 12 months. Pick an earlier
+                start date below to pull further back (up to the app's 10-year retention limit).
+              </p>
+              <label for="refresh-since-date-input" class="modal-label">Custom start date</label>
+              <input type="date" id="refresh-since-date-input" class="modal-input refresh-since-date-input" />
+              <div class="refresh-range-actions">
+                <button id="refresh-range-reset-btn" class="btn btn-secondary refresh-range-small-btn">Use default (12 months)</button>
+                <button id="refresh-range-apply-btn" class="btn btn-primary refresh-range-small-btn">Refresh From Date</button>
+              </div>
+              <hr class="refresh-range-divider" />
+              <button id="refresh-range-stop-btn" class="btn btn-secondary refresh-range-small-btn" disabled>Stop Refresh</button>
+              <button id="refresh-range-clear-btn" class="btn btn-secondary refresh-range-small-btn refresh-range-danger-btn">Clear All Data</button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </header>
+
+  <!-- Banner shown while a refresh is in progress -->
+  <div id="refresh-banner" class="refresh-banner hidden">
+    <span class="spinner"></span>
+    <div class="refresh-banner__body">
+      <div class="refresh-banner__row">
+        <span id="refresh-banner-text">Refreshing data…</span>
+        <span id="refresh-banner-stats" class="refresh-banner-stats hidden"></span>
+      </div>
+      <div id="refresh-progress-track" class="refresh-progress-track hidden">
+        <div id="refresh-progress-bar" class="refresh-progress-bar"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ============ MAIN CONTENT (views swapped by router) ============ -->
+  <main id="app-root" class="app-root">
+
+    <!-- ---------- RECENT TRADES VIEW (home / landing page) ---------- -->
+    <section id="view-recent" class="view hidden">
+      <div class="view-toolbar">
+        <p id="recent-subtitle" class="view-subtitle">Most recently disclosed trades</p>
+      </div>
+      <div id="recent-content" class="content-area">
+        <p class="loading-text">Loading…</p>
+      </div>
+    </section>
+
+    <!-- ---------- POLITICIANS LIST VIEW ---------- -->
+    <section id="view-politicians" class="view hidden">
+      <div class="view-toolbar">
+        <div class="filters">
+          <select id="filter-party" aria-label="Filter by party">
+            <option value="">All Parties</option>
+          </select>
+          <select id="filter-state" aria-label="Filter by state">
+            <option value="">All States</option>
+          </select>
+          <select id="filter-chamber" aria-label="Filter by chamber">
+            <option value="">All Chambers</option>
+          </select>
+          <input
+            type="search"
+            id="filter-search"
+            placeholder="Search by name…"
+            aria-label="Search politicians"
+          />
+        </div>
+      </div>
+      <div id="politicians-content" class="content-area">
+        <p class="loading-text">Loading…</p>
+      </div>
+    </section>
+
+    <!-- ---------- POLITICIAN DETAIL VIEW ---------- -->
+    <section id="view-politician-detail" class="view hidden">
+      <button class="back-btn" data-back="#/politicians">&larr; Back to Politicians</button>
+      <div id="politician-detail-content" class="content-area">
+        <p class="loading-text">Loading…</p>
+      </div>
+    </section>
+
+    <!-- ---------- STOCKS LIST VIEW ---------- -->
+    <section id="view-stocks" class="view hidden">
+      <div class="view-toolbar">
+        <p class="view-subtitle">Tickers disclosed by more than one politician</p>
+      </div>
+      <div id="stocks-content" class="content-area">
+        <p class="loading-text">Loading…</p>
+      </div>
+    </section>
+
+    <!-- ---------- STOCK DETAIL VIEW ---------- -->
+    <section id="view-stock-detail" class="view hidden">
+      <button class="back-btn" data-back="#/stocks">&larr; Back to Stocks</button>
+      <div id="stock-detail-content" class="content-area">
+        <p class="loading-text">Loading…</p>
+      </div>
+    </section>
+
+  </main>
+
+  <!-- ============ SETTINGS MODAL (optional Congress.gov API key) ============ -->
+  <div id="settings-modal" class="modal-overlay hidden">
+    <div class="modal">
+      <h2 class="modal-title">Data Source Settings</h2>
+      <p class="modal-desc">
+        By default, the politician directory (name, party, state, photo) comes from the free
+        <strong>congress-legislators</strong> community project &mdash; no signup required.
+        Optionally, paste a free API key from
+        <a href="https://api.data.gov/signup/" target="_blank" rel="noopener">api.data.gov</a>
+        below to source that same directory from the official <strong>Congress.gov API</strong> instead.
+        If the key is missing or a request fails, the app automatically falls back to the free source.
+        This setting does not change where trade disclosure data comes from.
+      </p>
+      <label for="congress-api-key-input" class="modal-label">Congress.gov / api.data.gov API key</label>
+      <input type="password" id="congress-api-key-input" class="modal-input"
+             placeholder="Paste your API key…" autocomplete="off" />
+
+      <hr class="modal-divider" />
+
+      <p class="modal-desc">
+        All downloaded data is cached on this machine (in the <code>data/</code> folder next to the
+        app) so it's available instantly next time you open it — nothing is re-downloaded unless the
+        source has actually changed. The app can also check for new disclosures automatically in the
+        background, in addition to the manual "Refresh Data" button.
+      </p>
+      <label for="auto-refresh-select" class="modal-label">Automatically check for new disclosures</label>
+      <select id="auto-refresh-select" class="modal-input">
+        <option value="0">Off (manual refresh only)</option>
+        <option value="60">Every hour (default)</option>
+        <option value="180">Every 3 hours</option>
+        <option value="360">Every 6 hours</option>
+        <option value="720">Every 12 hours</option>
+        <option value="1440">Once a day</option>
+      </select>
+
+      <p id="settings-status" class="settings-status"></p>
+      <div class="modal-actions">
+        <button id="settings-clear-btn" class="btn btn-secondary">Clear Key</button>
+        <button id="settings-cancel-btn" class="btn btn-secondary">Cancel</button>
+        <button id="settings-save-btn" class="btn btn-primary">Save</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ============ APIs PANEL (Settings > APIs) ============ -->
+  <!-- Lists candidate trade-disclosure data sources with an enable toggle,
+       plus a form to add a custom source. This only records which sources
+       are enabled/registered (persisted locally) -- no fetch/parse logic
+       for any of them is wired up yet. -->
+  <div id="apis-modal" class="modal-overlay hidden">
+    <div class="modal apis-modal">
+      <h2 class="modal-title">Trade Disclosure Data Sources</h2>
+      <p class="modal-desc">
+        These are candidate sources for congressional trade disclosure data. Enabling a source here
+        only records your preference locally &mdash; it does not fetch or parse any data yet. The
+        official House Clerk and Senate bulk disclosure downloads are the gold-standard, most
+        authoritative sources; the others below are secondary/helper sources that can make parsing
+        easier or more timely once fetch support is built for them.
+      </p>
+
+      <div id="apis-panel-scroll" class="apis-panel-scroll">
+        <p class="loading-text">Loading sources…</p>
+      </div>
+
+      <hr class="modal-divider" />
+
+      <h3 class="apis-add-custom-title">Add a Custom Source</h3>
+      <label for="custom-source-name-input" class="modal-label">Name</label>
+      <input type="text" id="custom-source-name-input" class="modal-input"
+             placeholder="e.g. My Custom Trade Feed" autocomplete="off" />
+
+      <label for="custom-source-url-input" class="modal-label">Endpoint URL</label>
+      <input type="text" id="custom-source-url-input" class="modal-input"
+             placeholder="https://example.com/api/trades" autocomplete="off" />
+
+      <label for="custom-source-key-input" class="modal-label">API Key (optional)</label>
+      <input type="password" id="custom-source-key-input" class="modal-input"
+             placeholder="Paste an API key if the source requires one…" autocomplete="off" />
+
+      <p id="apis-status" class="settings-status"></p>
+      <div class="modal-actions">
+        <button id="apis-close-btn" class="btn btn-secondary">Close</button>
+        <button id="custom-source-add-btn" class="btn btn-primary">Add Source</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ============ NOTIFY MODAL (per politician + stock alert preference) ============ -->
+  <!-- Lets the user save a "notify me" preference for one politician trading
+       one stock (buy/sell/either, above/below an amount). This only saves
+       the preference locally -- no alert-sending/trigger logic is wired up
+       yet. -->
+  <div id="notify-modal" class="modal-overlay hidden">
+    <div class="modal">
+      <h2 class="modal-title">Notify Me</h2>
+      <p id="notify-modal-subtitle" class="modal-desc"></p>
+
+      <label class="modal-label">Notify me when this politician</label>
+      <div class="notify-direction-options" role="radiogroup" aria-label="Trade direction">
+        <label class="notify-radio-option">
+          <input type="radio" name="notify-direction" value="buy" />
+          Buys
+        </label>
+        <label class="notify-radio-option">
+          <input type="radio" name="notify-direction" value="sell" />
+          Sells
+        </label>
+        <label class="notify-radio-option">
+          <input type="radio" name="notify-direction" value="either" checked />
+          Either
+        </label>
+      </div>
+
+      <label class="modal-label">this stock, for an amount</label>
+      <div class="notify-amount-row">
+        <select id="notify-amount-comparison" class="modal-input notify-amount-comparison">
+          <option value="above">Above</option>
+          <option value="below">Below</option>
+        </select>
+        <input type="number" id="notify-amount-threshold" class="modal-input notify-amount-threshold"
+               min="0" step="1000" placeholder="e.g. 50000" />
+      </div>
+
+      <p id="notify-status" class="settings-status"></p>
+      <div class="modal-actions">
+        <button id="notify-delete-btn" class="btn btn-secondary hidden">Remove Alert</button>
+        <button id="notify-cancel-btn" class="btn btn-secondary">Cancel</button>
+        <button id="notify-save-btn" class="btn btn-primary">Save Alert</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Toast notifications (e.g. "Opening news…") -->
+  <div id="toast" class="toast hidden"></div>
+
+  <!-- ============ FOOTER (present on all views) ============ -->
+  <footer class="app-footer">
+    Data sourced from public congressional disclosure filings (House/Senate Stock Watcher,
+    congress-legislators). Not investment advice. Trade data reflects disclosed transactions
+    only, not real-time or verified current holdings.
+  </footer>
+
+  <!-- Vendored Chart.js (local copy, no CDN) -->
+  <script src="/vendor/chart.min.js"></script>
+  <script src="/app.js"></script>
+</body>
+</html>
