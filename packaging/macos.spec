@@ -20,12 +20,20 @@
 # background (no Dock icon) since there is no native window to show.
 
 import os
+import sys
 
 block_cipher = None
 # SPECPATH is injected by PyInstaller and points at the directory containing
 # this .spec file (packaging/), regardless of the cwd the command was run
 # from -- so resolve the project root from there rather than ".".
 project_root = os.path.abspath(os.path.join(SPECPATH, os.pardir))
+
+# Read the app's version from the single source of truth (backend/version.py)
+# rather than duplicating it here, so CFBundleShortVersionString below can
+# never drift out of sync with what the running app reports in its footer
+# and update-check API.
+sys.path.insert(0, project_root)
+from backend.version import APP_VERSION  # noqa: E402
 
 a = Analysis(
     [os.path.join(project_root, "desktop.py")],
@@ -54,7 +62,13 @@ exe = EXE(
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
-    upx=True,
+    # UPX-packed binaries are a common antivirus/Gatekeeper-adjacent
+    # scanner false-positive trigger (plenty of real malware uses UPX to
+    # evade signature scanning), and macOS's own arm64 binaries in
+    # particular are prone to UPX corrupting them. Not worth the smaller
+    # binary size. See README.md's "Antivirus / SmartScreen false
+    # positives" section.
+    upx=False,
     console=False,
     disable_windowed_traceback=False,
     target_arch=None,
@@ -69,7 +83,7 @@ coll = COLLECT(
     a.zipfiles,
     a.datas,
     strip=False,
-    upx=True,
+    upx=False,  # see the EXE() upx=False comment above
     upx_exclude=[],
     name="PoliticianTradesTracker",
 )
@@ -85,6 +99,6 @@ app = BUNDLE(
         # console=False + pythonw on Windows and a windowless build on Linux.
         "LSUIElement": True,
         "NSHighResolutionCapable": True,
-        "CFBundleShortVersionString": "1.0.0",
+        "CFBundleShortVersionString": APP_VERSION,
     },
 )

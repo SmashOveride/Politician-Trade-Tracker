@@ -513,8 +513,19 @@ button {
 
 .btn-secondary:hover { background: var(--color-hover-bg); }
 
+/* Politicians view's trading-activity sort button, once engaged (see
+   POLITICIANS_SORT_CYCLE in app.js) -- same visual language as an active
+   filter, so it's clear at a glance the list isn't in its default order. */
+.btn-secondary.sort-active {
+  background: var(--color-accent);
+  color: #fff;
+  border-color: transparent;
+}
+
+.btn-secondary.sort-active:hover { background: var(--color-accent-dark); }
+
 .btn-small {
-  padding: 4px 10px;
+  padding: 4px 8px;
   font-size: 12px;
 }
 
@@ -588,7 +599,11 @@ button {
 .app-root {
   flex: 1 1 auto;
   padding: 20px;
-  max-width: 1200px;
+  /* Widened from 1200px so the trades table's full column set (ticker,
+     asset, party, politician, type, both dates, amount, profit/loss, and
+     the Notify/News/Records action buttons) has room to fit without
+     horizontal scrolling on a typical desktop window. */
+  max-width: 1440px;
   width: 100%;
   margin: 0 auto;
 }
@@ -638,6 +653,121 @@ button {
 }
 
 .content-area { width: 100%; }
+
+/* Recent Trades view: left-rail facet filter panel + main trades table,
+   shopping-site style (see renderRecentFiltersPanel in app.js). */
+.recent-layout {
+  display: flex;
+  align-items: flex-start;
+  gap: 20px;
+}
+
+.recent-trades-main {
+  flex: 1;
+  min-width: 0; /* lets the table scroll/shrink instead of overflowing the flex row */
+}
+
+.recent-filters-panel {
+  flex: 0 0 220px;
+  width: 220px;
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius);
+  padding: 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  position: sticky;
+  top: 12px;
+}
+
+.filter-group {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.filter-group__title {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--color-text-muted);
+  margin: 0 0 2px 0;
+}
+
+.filter-checkbox {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 13px;
+  color: var(--color-text);
+  cursor: pointer;
+}
+
+.filter-checkbox input[type='checkbox'] {
+  cursor: pointer;
+}
+
+.filter-date-range {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.filter-date-range input[type='date'] {
+  flex: 1;
+  min-width: 0;
+  padding: 6px 7px;
+  border-radius: 6px;
+  border: 1px solid var(--color-border);
+  background: var(--color-surface);
+  color: var(--color-text);
+  font-size: 12px;
+}
+
+.filter-date-range__sep {
+  color: var(--color-text-muted);
+  font-size: 12px;
+}
+
+.filter-search-input {
+  padding: 7px 10px;
+  border-radius: 6px;
+  border: 1px solid var(--color-border);
+  background: var(--color-surface);
+  color: var(--color-text);
+  font-size: 13px;
+  width: 100%;
+}
+
+.filter-search-input:focus,
+.filter-date-range input[type='date']:focus {
+  outline: none;
+  border-color: var(--color-accent);
+}
+
+.filter-actions {
+  border-top: 1px solid var(--color-border);
+  padding-top: 12px;
+}
+
+.filter-actions .btn {
+  width: 100%;
+  justify-content: center;
+}
+
+/* Narrow viewports: drop the sidebar above the table instead of beside it,
+   and let it size to content instead of the fixed 220px rail width. */
+@media (max-width: 860px) {
+  .recent-layout {
+    flex-direction: column;
+  }
+  .recent-filters-panel {
+    width: 100%;
+    flex: 1 1 auto;
+    position: static;
+  }
+}
 
 .loading-text, .empty-state {
   color: var(--color-text-muted);
@@ -815,10 +945,19 @@ table.data-table {
 }
 
 .data-table th, .data-table td {
-  padding: 9px 12px;
+  padding: 9px 10px;
   text-align: left;
   border-bottom: 1px solid var(--color-border);
   white-space: nowrap;
+}
+
+/* Action-only columns (Notify/News/Records -- see ACTION_COLUMN_KEYS in
+   app.js) hold nothing but a small button, so they don't need full data-cell
+   padding -- keeps adding more of them from pushing the table wider than
+   necessary before horizontal scrolling (see .table-wrap) kicks in. */
+.data-table th.col-btn, .data-table td.col-btn {
+  padding-left: 5px;
+  padding-right: 5px;
 }
 
 .data-table th.th-center {
@@ -906,10 +1045,8 @@ table.data-table {
 /* Pagination bar (shown above and below paginated tables, e.g. Recent Trades) */
 .pagination-bar {
   display: flex;
-  justify-content: space-between;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: 10px;
+  flex-direction: column;
+  gap: 4px;
   margin-bottom: 10px;
   padding: 8px 2px;
 }
@@ -917,6 +1054,14 @@ table.data-table {
 .pagination-slot-bottom .pagination-bar {
   margin-top: 10px;
   margin-bottom: 0;
+}
+
+.pagination-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
 }
 
 .pagination-info {
@@ -930,16 +1075,50 @@ table.data-table {
   gap: 10px;
 }
 
-.pagination-page {
+.pagination-page-jump {
+  display: flex;
+  align-items: center;
+  gap: 6px;
   font-size: 12.5px;
   color: var(--color-slate);
   font-weight: 600;
   white-space: nowrap;
 }
 
+.pagination-page-input {
+  width: 48px;
+  text-align: center;
+  padding: 3px 4px;
+  border-radius: 5px;
+  border: 1px solid var(--color-border);
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--color-slate);
+  background: var(--color-surface);
+  /* Hide the native up/down spinner so it reads as a plain page-jump field. */
+  -moz-appearance: textfield;
+}
+
+.pagination-page-input::-webkit-outer-spin-button,
+.pagination-page-input::-webkit-inner-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+
+.pagination-page-input:focus {
+  outline: none;
+  border-color: var(--color-accent);
+}
+
 .pagination-controls .btn:disabled {
   opacity: 0.45;
   cursor: not-allowed;
+}
+
+.pagination-total-count {
+  font-size: 11px;
+  color: var(--color-text-muted);
+  text-align: center;
 }
 
 .legend-swatch {
@@ -1323,6 +1502,11 @@ table.data-table {
   color: var(--color-rep);
 }
 
+.settings-menu-item-update-available {
+  color: var(--color-accent);
+  font-weight: 700;
+}
+
 /* ---------------- Settings modal ---------------- */
 
 .modal-overlay {
@@ -1603,6 +1787,12 @@ select.modal-input {
   padding: 12px 20px 16px 20px;
   border-top: 1px solid var(--color-border);
   background: var(--color-surface);
+}
+
+.app-footer__version {
+  display: inline-block;
+  margin-left: 6px;
+  opacity: 0.75;
 }
 
 /* ---------------- Responsive ---------------- */

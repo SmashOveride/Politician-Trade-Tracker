@@ -48,7 +48,11 @@ exe = EXE(
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
-    upx=True,
+    # UPX-packed binaries are a common antivirus/EDR false-positive
+    # trigger on every platform (plenty of real malware uses UPX to evade
+    # signature scanning), not worth the smaller binary size here. See
+    # README.md's "Antivirus / SmartScreen false positives" section.
+    upx=False,
     console=False,
     disable_windowed_traceback=False,
     target_arch=None,
@@ -63,7 +67,7 @@ coll = COLLECT(
     a.zipfiles,
     a.datas,
     strip=False,
-    upx=True,
+    upx=False,  # see the EXE() upx=False comment above
     upx_exclude=[],
     name="PoliticianTradesTracker",
 )

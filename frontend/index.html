@@ -62,6 +62,7 @@
           <span class="settings-caret">&#9662;</span>
         </button>
         <div id="settings-menu" class="settings-menu hidden">
+          <button id="settings-menu-update" class="settings-menu-item" title="Check GitHub for a newer version">Update App</button>
           <button id="settings-menu-apis" class="settings-menu-item">APIs</button>
           <button id="settings-menu-restart" class="settings-menu-item">Restart Server</button>
           <button id="settings-menu-shutdown" class="settings-menu-item settings-menu-item-danger">Shut Down Server</button>
@@ -146,6 +147,9 @@
             placeholder="Search by name…"
             aria-label="Search politicians"
           />
+          <button type="button" id="sort-politicians-activity" class="btn btn-secondary btn-small">
+            Sort by Trading Activity
+          </button>
         </div>
       </div>
       <div id="politicians-content" class="content-area">
@@ -215,6 +219,16 @@
         <option value="720">Every 12 hours</option>
         <option value="1440">Once a day</option>
       </select>
+
+      <hr class="modal-divider" />
+
+      <p class="modal-desc">
+        A small number of House PTR filings are scanned images rather than machine-generated PDFs and can't be
+        read normally. If <a href="https://github.com/tesseract-ocr/tesseract" target="_blank" rel="noopener">Tesseract OCR</a>
+        is installed on this machine (see README.md), the app automatically falls back to OCR for those filings
+        so their trades aren't skipped. This is fully optional -- everything else works fine without it.
+      </p>
+      <p id="ocr-status" class="settings-status"></p>
 
       <p id="settings-status" class="settings-status"></p>
       <div class="modal-actions">
@@ -321,6 +335,7 @@
     Data sourced from public congressional disclosure filings (House/Senate Stock Watcher,
     congress-legislators). Not investment advice. Trade data reflects disclosed transactions
     only, not real-time or verified current holdings.
+    <span id="app-version-footer" class="app-footer__version"></span>
   </footer>
 
   <!-- Vendored Chart.js (local copy, no CDN) -->

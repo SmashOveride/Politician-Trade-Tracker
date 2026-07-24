@@ -37,6 +37,57 @@ const filterState = {
   search: '',
 };
 
+// Current filter selections for the Recent Trades view's left-rail facet
+// panel (see renderRecentFiltersPanel). Kept outside the DOM, like
+// filterState above, so pagination and filter-change handlers can both read
+// the live selection without re-scraping every checkbox on every request.
+const recentFiltersState = {
+  startDate: '',
+  endDate: '',
+  types: [], // transaction_type values: purchase, sale, sale_partial, exchange
+  parties: [], // Democrat, Republican, Independent
+  amountBuckets: [], // bucket-floor dollar values, see AMOUNT_BUCKETS
+  search: '',
+};
+
+// Standard STOCK Act disclosure amount buckets. `floor` must match a value
+// in backend/app.py's RECENT_TRADES_AMOUNT_BUCKET_FLOORS exactly -- kept in
+// sync by hand since amount_min is stored as that bucket's floor dollar
+// value regardless of any OCR garbling in the bucket's display text.
+const AMOUNT_BUCKETS = [
+  { floor: 1001, label: '$1,001 – $15,000' },
+  { floor: 15001, label: '$15,001 – $50,000' },
+  { floor: 50001, label: '$50,001 – $100,000' },
+  { floor: 100001, label: '$100,001 – $250,000' },
+  { floor: 250001, label: '$250,001 – $500,000' },
+  { floor: 500001, label: '$500,001 – $1,000,000' },
+  { floor: 1000001, label: '$1,000,001 – $5,000,000' },
+  { floor: 5000001, label: '$5,000,001 – $25,000,000' },
+  { floor: 25000001, label: '$25,000,001 – $50,000,000' },
+  { floor: 50000000, label: 'Over $50,000,000' },
+];
+
+// Client-side sort mode for the Politicians view's card grid (the list
+// itself always comes back from the API in alphabetical order -- see
+// list_politicians()'s "ORDER BY last_name, first_name" -- so re-sorting
+// by trade_count is just a local array sort, no extra request needed).
+// Cycles: name -> most-active-first -> least-active-first -> back to name.
+const POLITICIANS_SORT_CYCLE = ['name', 'active_desc', 'active_asc'];
+const POLITICIANS_SORT_LABELS = {
+  name: 'Sort by Trading Activity',
+  active_desc: 'Trading Activity: Most Active ▼',
+  active_asc: 'Trading Activity: Least Active ▲',
+};
+let politiciansSortMode = 'name';
+
+function sortPoliticiansList(list) {
+  if (politiciansSortMode === 'name') return list; // already alphabetical from the API
+  const sorted = list.slice();
+  const dir = politiciansSortMode === 'active_desc' ? -1 : 1;
+  sorted.sort((a, b) => dir * ((a.trade_count ?? 0) - (b.trade_count ?? 0)));
+  return sorted;
+}
+
 // Chart.js instance currently on screen. Only one chart is ever visible
 // at a time (politician detail OR stock detail), so we keep a single
 // reference and destroy it before drawing a new one to avoid leaks.
@@ -535,6 +586,10 @@ async function updateMeta() {
     if (meta.default_refresh_since_date) refreshSinceDefaultDate = meta.default_refresh_since_date;
     if (meta.min_refresh_since_date) refreshSinceMinDate = meta.min_refresh_since_date;
     syncRefreshSinceDateInput();
+    if (meta.app_version) {
+      const versionEl = document.getElementById('app-version-footer');
+      if (versionEl) versionEl.textContent = `• v${meta.app_version}`;
+    }
     if (meta.refreshing) {
       setRefreshingUI(true, meta.last_message);
       pollRefreshStatus();
@@ -891,8 +946,10 @@ async function openSettingsModal() {
   const input = document.getElementById('congress-api-key-input');
   const autoRefreshSelect = document.getElementById('auto-refresh-select');
   const status = document.getElementById('settings-status');
+  const ocrStatus = document.getElementById('ocr-status');
   input.value = '';
   status.textContent = 'Loading current status…';
+  ocrStatus.textContent = '';
   modal.classList.remove('hidden');
   try {
     const s = await fetchJSON('/api/settings');
@@ -906,6 +963,9 @@ async function openSettingsModal() {
       status.textContent = 'No key configured — using the free community directory (this is completely fine).';
     }
     autoRefreshSelect.value = String(s.auto_refresh_minutes ?? 180);
+    ocrStatus.textContent = s.ocr_available
+      ? 'OCR fallback: available ✓'
+      : 'OCR fallback: not installed (optional -- see README.md)';
   } catch (err) {
     status.textContent = 'Could not load current settings.';
   }
@@ -1007,8 +1067,9 @@ function applyRefreshSinceDate() {
 
 /**
  * Settings dropdown menu (Settings button in the header). Sections, top to
- * bottom: "APIs" (opens the data-source panel below), "Restart Server",
- * "Shut Down Server" (both call the backend /api/server/* endpoints).
+ * bottom: "Update App" (checks GitHub for a newer release), "APIs" (opens
+ * the data-source panel below), "Restart Server", "Shut Down Server" (both
+ * call the backend /api/server/* endpoints).
  */
 function toggleSettingsMenu(forceOpen) {
   const menu = document.getElementById('settings-menu');
@@ -1042,6 +1103,47 @@ async function shutdownServer() {
   } catch (err) {
     showToast(`Failed to shut down: ${err.message}`);
   }
+}
+
+/**
+ * "Update App" button (top of the Settings dropdown). Checks GitHub for a
+ * newer published release than the one currently running (see
+ * backend/update_check.py) -- entirely read-only, never downloads or
+ * installs anything itself. While no update is available, the button reads
+ * "Update App" and just opens the releases page (so users can always check
+ * manually / see release notes). Once a newer version is found, it switches
+ * to "Update Available" and stays that way until the app is restarted with
+ * the newer version installed.
+ */
+let latestUpdateInfo = null;
+
+async function checkForAppUpdate() {
+  try {
+    latestUpdateInfo = await fetchJSON('/api/version/check');
+  } catch (err) {
+    latestUpdateInfo = null; // offline/rate-limited -- fail silently, try again next cycle
+  }
+  renderUpdateButton();
+}
+
+function renderUpdateButton() {
+  const btn = document.getElementById('settings-menu-update');
+  if (!btn || !latestUpdateInfo) return;
+  if (latestUpdateInfo.update_available) {
+    btn.textContent = `Update Available (v${latestUpdateInfo.latest_version})`;
+    btn.classList.add('settings-menu-item-update-available');
+    btn.title = `A newer version (v${latestUpdateInfo.latest_version}) is available on GitHub`;
+  } else {
+    btn.textContent = 'Update App';
+    btn.classList.remove('settings-menu-item-update-available');
+    btn.title = 'Check GitHub for a newer version';
+  }
+}
+
+function openUpdatePage() {
+  closeSettingsMenu();
+  const url = (latestUpdateInfo && latestUpdateInfo.release_url) || 'https://github.com/';
+  window.open(url, '_blank', 'noopener');
 }
 
 /**
@@ -1183,6 +1285,7 @@ function wireHeaderEvents() {
     e.stopPropagation();
     toggleSettingsMenu();
   });
+  document.getElementById('settings-menu-update').addEventListener('click', openUpdatePage);
   document.getElementById('settings-menu-apis').addEventListener('click', () => {
     closeSettingsMenu();
     openApisModal();
@@ -1269,6 +1372,13 @@ function wireHeaderEvents() {
       renderPoliticiansView();
     }, 300)
   );
+  document.getElementById('sort-politicians-activity').addEventListener('click', (e) => {
+    const nextIndex = (POLITICIANS_SORT_CYCLE.indexOf(politiciansSortMode) + 1) % POLITICIANS_SORT_CYCLE.length;
+    politiciansSortMode = POLITICIANS_SORT_CYCLE[nextIndex];
+    e.target.textContent = POLITICIANS_SORT_LABELS[politiciansSortMode];
+    e.target.classList.toggle('sort-active', politiciansSortMode !== 'name');
+    renderPoliticiansView();
+  });
 }
 
 /* ---------------------------------------------------------------------
@@ -1277,6 +1387,8 @@ function wireHeaderEvents() {
  *     transaction date), since that's what's newly actionable information.
  * ------------------------------------------------------------------- */
 
+const RECENT_TRADES_PAGE_SIZE = 50;
+
 async function renderRecentView() {
   const container = document.getElementById('recent-content');
   const subtitle = document.getElementById('recent-subtitle');
@@ -1284,40 +1396,220 @@ async function renderRecentView() {
   container.innerHTML = `
     <div id="portfolio-chart-panel"></div>
     <h3 class="section-heading">Recent Disclosures</h3>
-    <div id="recent-trades-section"><p class="loading-text">Loading…</p></div>
+    <div class="recent-layout">
+      ${renderRecentFiltersPanel()}
+      <div id="recent-trades-section" class="recent-trades-main"><p class="loading-text">Loading…</p></div>
+    </div>
   `;
   mountPortfolioChart(container.querySelector('#portfolio-chart-panel'));
 
   const tradesSection = container.querySelector('#recent-trades-section');
+  wireRecentFiltersPanel(container, tradesSection, subtitle);
+  await loadRecentTradesPage(tradesSection, subtitle, 1);
+}
 
+/** Builds the left-rail facet filter panel for the Recent Trades view --
+ * date range, trade type, party, disclosed-amount bucket, and a stock/asset
+ * search box, in the style of a typical shopping-site filter sidebar.
+ * Rendered fresh each time renderRecentView() runs (its inputs are
+ * initialized from recentFiltersState so a same-session view switch away
+ * and back doesn't silently reset the user's selections). */
+function renderRecentFiltersPanel() {
+  const typeChecked = (val) => (recentFiltersState.types.includes(val) ? 'checked' : '');
+  const partyChecked = (val) => (recentFiltersState.parties.includes(val) ? 'checked' : '');
+  const amountChecked = (floor) => (recentFiltersState.amountBuckets.includes(floor) ? 'checked' : '');
+
+  const amountOptions = AMOUNT_BUCKETS.map(
+    (b) => `
+      <label class="filter-checkbox">
+        <input type="checkbox" class="rf-amount" value="${b.floor}" ${amountChecked(b.floor)} />
+        ${escapeHtml(b.label)}
+      </label>`
+  ).join('');
+
+  return `
+    <aside class="recent-filters-panel" id="recent-filters-panel">
+      <div class="filter-group">
+        <h4 class="filter-group__title">Date Range</h4>
+        <div class="filter-date-range">
+          <input type="date" id="rf-start-date" aria-label="Start date" value="${escapeHtml(recentFiltersState.startDate)}" />
+          <span class="filter-date-range__sep">to</span>
+          <input type="date" id="rf-end-date" aria-label="End date" value="${escapeHtml(recentFiltersState.endDate)}" />
+        </div>
+      </div>
+
+      <div class="filter-group">
+        <h4 class="filter-group__title">Trade Type</h4>
+        <label class="filter-checkbox"><input type="checkbox" class="rf-type" value="purchase" ${typeChecked('purchase')} /> Purchase</label>
+        <label class="filter-checkbox"><input type="checkbox" class="rf-type" value="sale,sale_partial" ${typeChecked('sale,sale_partial')} /> Sale</label>
+        <label class="filter-checkbox"><input type="checkbox" class="rf-type" value="exchange" ${typeChecked('exchange')} /> Exchange</label>
+      </div>
+
+      <div class="filter-group">
+        <h4 class="filter-group__title">Party</h4>
+        <label class="filter-checkbox"><input type="checkbox" class="rf-party" value="Democrat" ${partyChecked('Democrat')} /> Democrat</label>
+        <label class="filter-checkbox"><input type="checkbox" class="rf-party" value="Republican" ${partyChecked('Republican')} /> Republican</label>
+        <label class="filter-checkbox"><input type="checkbox" class="rf-party" value="Independent" ${partyChecked('Independent')} /> Independent</label>
+      </div>
+
+      <div class="filter-group">
+        <h4 class="filter-group__title">Trade Amount</h4>
+        ${amountOptions}
+      </div>
+
+      <div class="filter-group">
+        <h4 class="filter-group__title">Stock / Asset</h4>
+        <input type="search" id="rf-search" class="filter-search-input" placeholder="Ticker or company name…"
+          aria-label="Search stock or asset name" value="${escapeHtml(recentFiltersState.search)}" />
+      </div>
+
+      <div class="filter-actions">
+        <button type="button" id="rf-clear" class="btn btn-secondary btn-small">Clear Filters</button>
+      </div>
+    </aside>`;
+}
+
+/** Wires up the filter panel's inputs (see renderRecentFiltersPanel) to
+ * update recentFiltersState and reload page 1 of the trades table on every
+ * change -- never re-renders the panel itself, so checking a box doesn't
+ * disturb the rest of the panel's state or scroll position. */
+function wireRecentFiltersPanel(container, tradesSection, subtitle) {
+  const reload = () => loadRecentTradesPage(tradesSection, subtitle, 1);
+
+  container.querySelector('#rf-start-date').addEventListener('change', (e) => {
+    recentFiltersState.startDate = e.target.value;
+    reload();
+  });
+  container.querySelector('#rf-end-date').addEventListener('change', (e) => {
+    recentFiltersState.endDate = e.target.value;
+    reload();
+  });
+
+  container.querySelectorAll('.rf-type').forEach((el) => {
+    el.addEventListener('change', () => {
+      recentFiltersState.types = Array.from(container.querySelectorAll('.rf-type:checked')).map((c) => c.value);
+      reload();
+    });
+  });
+  container.querySelectorAll('.rf-party').forEach((el) => {
+    el.addEventListener('change', () => {
+      recentFiltersState.parties = Array.from(container.querySelectorAll('.rf-party:checked')).map((c) => c.value);
+      reload();
+    });
+  });
+  container.querySelectorAll('.rf-amount').forEach((el) => {
+    el.addEventListener('change', () => {
+      recentFiltersState.amountBuckets = Array.from(container.querySelectorAll('.rf-amount:checked')).map((c) =>
+        Number(c.value)
+      );
+      reload();
+    });
+  });
+
+  container.querySelector('#rf-search').addEventListener(
+    'input',
+    debounce((e) => {
+      recentFiltersState.search = e.target.value;
+      reload();
+    }, 300)
+  );
+
+  container.querySelector('#rf-clear').addEventListener('click', () => {
+    recentFiltersState.startDate = '';
+    recentFiltersState.endDate = '';
+    recentFiltersState.types = [];
+    recentFiltersState.parties = [];
+    recentFiltersState.amountBuckets = [];
+    recentFiltersState.search = '';
+    // Full view re-render (rather than just reload()) so every checkbox,
+    // date input, and the search box visibly reset to empty too.
+    renderRecentView();
+  });
+}
+
+/** Pushes the filter panel down so its top edge lines up with the actual
+ * <table> (not the top of the trades section, which also includes the
+ * shared trades-table component's own "Reset Columns" toolbar row above the
+ * table itself). Measured from the live DOM rather than a hardcoded pixel
+ * offset so it stays correct regardless of font size/theme -- the toolbar
+ * row's height isn't a fixed constant we can just hardcode reliably.
+ * No-ops below the 860px breakpoint where the panel stacks above the table
+ * instead of beside it (see the .recent-layout media query in style.css). */
+function alignRecentFiltersPanelWithTable(tradesSection) {
+  const panel = document.getElementById('recent-filters-panel');
+  const tableWrap = tradesSection.querySelector('.table-wrap');
+  if (!panel || !tableWrap) return;
+  if (window.innerWidth <= 860) {
+    panel.style.marginTop = '';
+    return;
+  }
+  const offset = tableWrap.getBoundingClientRect().top - tradesSection.getBoundingClientRect().top;
+  panel.style.marginTop = `${Math.max(0, Math.round(offset))}px`;
+}
+
+/** True if any Recent Trades facet filter is currently active. */
+function recentFiltersActive() {
+  const f = recentFiltersState;
+  return !!(f.startDate || f.endDate || f.types.length || f.parties.length || f.amountBuckets.length || f.search);
+}
+
+/** Builds the /api/trades/recent query string for the current page and the
+ * live recentFiltersState selection. */
+function buildRecentTradesQuery(page) {
+  const params = new URLSearchParams();
+  params.set('page', page);
+  params.set('page_size', RECENT_TRADES_PAGE_SIZE);
+  const f = recentFiltersState;
+  if (f.startDate) params.set('start_date', f.startDate);
+  if (f.endDate) params.set('end_date', f.endDate);
+  if (f.types.length) params.set('type', f.types.join(','));
+  if (f.parties.length) params.set('party', f.parties.join(','));
+  if (f.amountBuckets.length) params.set('amount_buckets', f.amountBuckets.join(','));
+  if (f.search) params.set('search', f.search);
+  return params.toString();
+}
+
+/** Fetches and renders one page of the Recent Disclosures table (server-side
+ * paginated and filtered, most recently disclosed first -- see
+ * /api/trades/recent). Re-invoked by the pagination controls'
+ * Previous/Next/page-jump handlers to load a different page, and by the
+ * filter panel on every selection change (always resetting to page 1),
+ * without re-rendering the whole view. */
+async function loadRecentTradesPage(tradesSection, subtitle, page) {
+  tradesSection.innerHTML = '<p class="loading-text">Loading…</p>';
   try {
-    const data = await fetchJSON('/api/trades/recent?days=7');
+    const data = await fetchJSON(`/api/trades/recent?${buildRecentTradesQuery(page)}`);
     const trades = data.trades || [];
 
-    if (!trades.length) {
+    if (!data.total) {
       subtitle.textContent = 'Most recently disclosed trades';
-      tradesSection.innerHTML = `<div class="empty-state"><strong>No trade data yet.</strong>Click "Refresh Data" above to download the latest disclosures.</div>`;
+      tradesSection.innerHTML = recentFiltersActive()
+        ? `<div class="empty-state"><strong>No trades match your filters.</strong>Try clearing a filter.</div>`
+        : `<div class="empty-state"><strong>No trade data yet.</strong>Click "Refresh Data" above to download the latest disclosures.</div>`;
       return;
     }
 
-    const dates = data.disclosure_dates || [];
-    if (dates.length > 1) {
-      subtitle.textContent = `Trades disclosed ${formatDate(dates[dates.length - 1])} – ${formatDate(dates[0])} (${trades.length} filings)`;
-    } else {
-      subtitle.textContent = `Trades disclosed ${formatDate(dates[0])} (${trades.length} filings)`;
-    }
+    subtitle.textContent = recentFiltersActive()
+      ? `${data.total.toLocaleString()} trade${data.total === 1 ? '' : 's'} match your filters`
+      : `All disclosed trades, most recently disclosed first (${data.total.toLocaleString()} total)`;
 
     tradesSection.innerHTML = '<div id="recent-trades-table"></div>';
     mountTradesTable(tradesSection.querySelector('#recent-trades-table'), trades, {
       showPoliticianColumn: true,
       showPartyColumn: true,
-      searchable: true,
+      searchable: false,
       defaultSortKey: 'disclosure_date',
       emptyMessage: 'No recent disclosures found.',
       tableId: 'recent-trades',
-      paginate: true,
-      pageSize: 50,
+      pageSize: RECENT_TRADES_PAGE_SIZE,
+      serverPagination: {
+        page: data.page,
+        totalPages: data.total_pages,
+        totalRows: data.total,
+        onPageChange: (newPage) => loadRecentTradesPage(tradesSection, subtitle, newPage),
+      },
     });
+    alignRecentFiltersPanelWithTable(tradesSection);
   } catch (err) {
     tradesSection.innerHTML = `<div class="empty-state"><strong>Failed to load recent trades.</strong>${escapeHtml(err.message)}</div>`;
   }
@@ -1731,7 +2023,8 @@ async function renderPoliticiansView() {
       return;
     }
 
-    container.innerHTML = `<div class="politician-grid">${list.map(politicianCardHTML).join('')}</div>`;
+    const sorted = sortPoliticiansList(list);
+    container.innerHTML = `<div class="politician-grid">${sorted.map(politicianCardHTML).join('')}</div>`;
 
     container.querySelectorAll('.politician-card').forEach((card) => {
       const go = () => navigateTo(`#/politicians/${encodeURIComponent(card.dataset.bioguide)}`);
@@ -2055,6 +2348,13 @@ function partyLetterBadge(party) {
   return '';
 }
 
+// Pure-button columns (no data to read, just an action) -- rendered with
+// tighter cell padding (see .col-btn in style.css) than data columns, and
+// used to decide which header cells get that same tighter padding, so
+// adding more of these doesn't keep pushing the table wider than it needs
+// to be.
+const ACTION_COLUMN_KEYS = new Set(['_notify', '_news', '_records']);
+
 /** Renders a single <td> for one column of one trade row. */
 function renderTradeCell(key, trade) {
   switch (key) {
@@ -2080,7 +2380,7 @@ function renderTradeCell(key, trade) {
       return `<td>${profitLossBadge(trade)}</td>`;
     case '_notify':
       return `
-        <td>
+        <td class="col-btn">
           <button class="btn btn-secondary btn-small notify-btn"
             data-ticker="${escapeHtml(trade.ticker || '')}"
             data-bioguide="${escapeHtml(trade.bioguide_id || '')}"
@@ -2090,10 +2390,18 @@ function renderTradeCell(key, trade) {
         </td>`;
     case '_news':
       return `
-        <td>
+        <td class="col-btn">
           <button class="btn btn-secondary btn-small news-btn"
             data-ticker="${escapeHtml(trade.ticker || '')}">
             News
+          </button>
+        </td>`;
+    case '_records':
+      return `
+        <td class="col-btn">
+          <button class="btn btn-secondary btn-small records-btn"
+            data-source-url="${escapeHtml(trade.source_url || '')}">
+            Records
           </button>
         </td>`;
     default:
@@ -2150,9 +2458,15 @@ function mountTradesTable(container, trades, opts = {}) {
     tableId = null,
     paginate = false,
     pageSize = 50,
+    // When set, `trades` holds only the current page's rows (fetched from
+    // the server) rather than the full dataset -- pagination controls call
+    // onPageChange(newPage) to fetch a different page instead of slicing
+    // locally. { page, totalPages, totalRows, onPageChange }
+    serverPagination = null,
   } = opts;
 
-  const state = { sortKey: defaultSortKey, sortDir: 'desc', search: '', page: 1 };
+  const usePagination = paginate || !!serverPagination;
+  const state = { sortKey: defaultSortKey, sortDir: 'desc', search: '', page: serverPagination ? serverPagination.page : 1 };
 
   const baseColumns = [
     { key: 'ticker', label: 'Ticker' },
@@ -2166,6 +2480,7 @@ function mountTradesTable(container, trades, opts = {}) {
     { key: '_profit_loss', label: 'Profit/Loss', sortable: false },
     { key: '_notify', label: '', sortable: false },
     { key: '_news', label: '', sortable: false },
+    { key: '_records', label: '', sortable: false },
   ];
   const columnByKey = new Map(baseColumns.map((c) => [c.key, c]));
   let columns = loadColumnOrder(tableId, baseColumns.map((c) => c.key))
@@ -2227,7 +2542,10 @@ function mountTradesTable(container, trades, opts = {}) {
           state.sortKey = key;
           state.sortDir = ['transaction_date', 'disclosure_date', 'amount_min'].includes(key) ? 'desc' : 'asc';
         }
-        state.page = 1;
+        // Server-paginated tables only hold the current page's rows -- resetting
+        // to page 1 here without actually fetching it would show a mismatched
+        // "Page 1 of N" label, so leave the page alone and just re-sort in place.
+        if (!serverPagination) state.page = 1;
         updateSortArrows();
         applyAndRender();
       });
@@ -2270,7 +2588,7 @@ function mountTradesTable(container, trades, opts = {}) {
           ? `<div class="table-legend"><span class="legend-swatch legend-swatch-gold"></span> Highlighted rows: this politician sits on a committee that oversees this trade's sector</div>`
           : ''
       }
-      ${paginate ? '<div class="pagination-slot pagination-slot-top"></div>' : ''}
+      ${usePagination ? '<div class="pagination-slot pagination-slot-top"></div>' : ''}
       <div class="table-wrap">
         <table class="data-table">
           <thead>
@@ -2280,7 +2598,7 @@ function mountTradesTable(container, trades, opts = {}) {
                   (c) =>
                     `<th draggable="true" data-key="${c.key}" class="draggable-col ${
                       c.sortable === false ? '' : 'sortable'
-                    }" title="Drag to reorder columns">${escapeHtml(
+                    } ${ACTION_COLUMN_KEYS.has(c.key) ? 'col-btn' : ''}" title="Drag to reorder columns">${escapeHtml(
                       c.label
                     )}<span class="sort-arrow"></span></th>`
                 )
@@ -2290,7 +2608,7 @@ function mountTradesTable(container, trades, opts = {}) {
           <tbody></tbody>
         </table>
       </div>
-      ${paginate ? '<div class="pagination-slot pagination-slot-bottom"></div>' : ''}`;
+      ${usePagination ? '<div class="pagination-slot pagination-slot-bottom"></div>' : ''}`;
 
     wireColumnDragAndDrop();
     wireSortClicks();
@@ -2303,7 +2621,7 @@ function mountTradesTable(container, trades, opts = {}) {
         'input',
         debounce(() => {
           state.search = searchInput.value;
-          state.page = 1;
+          if (!serverPagination) state.page = 1;
           applyAndRender();
         }, 250)
       );
@@ -2318,16 +2636,21 @@ function mountTradesTable(container, trades, opts = {}) {
     const endIdx = Math.min(state.page * pageSize, totalRows);
     return `
       <div class="pagination-bar">
-        <span class="pagination-info">Showing ${startIdx}–${endIdx} of ${totalRows}</span>
-        <div class="pagination-controls">
-          <button type="button" class="btn btn-secondary btn-small pagination-prev" ${
-            state.page <= 1 ? 'disabled' : ''
-          }>← Previous</button>
-          <span class="pagination-page">Page ${state.page} of ${totalPages}</span>
-          <button type="button" class="btn btn-secondary btn-small pagination-next" ${
-            state.page >= totalPages ? 'disabled' : ''
-          }>Next →</button>
+        <div class="pagination-row">
+          <span class="pagination-info">Showing ${startIdx}–${endIdx} of ${totalRows.toLocaleString()}</span>
+          <div class="pagination-controls">
+            <button type="button" class="btn btn-secondary btn-small pagination-prev" ${
+              state.page <= 1 ? 'disabled' : ''
+            }>← Previous</button>
+            <span class="pagination-page-jump">
+              Page <input type="number" class="pagination-page-input" min="1" max="${totalPages}" value="${state.page}" aria-label="Page number" /> of ${totalPages}
+            </span>
+            <button type="button" class="btn btn-secondary btn-small pagination-next" ${
+              state.page >= totalPages ? 'disabled' : ''
+            }>Next →</button>
+          </div>
         </div>
+        <div class="pagination-total-count">${totalRows.toLocaleString()} record${totalRows === 1 ? '' : 's'} total</div>
       </div>`;
   }
 
@@ -2336,19 +2659,40 @@ function mountTradesTable(container, trades, opts = {}) {
     container.querySelectorAll('.pagination-slot').forEach((slot) => {
       slot.innerHTML = html;
     });
-    container.querySelectorAll('.pagination-prev').forEach((btn) => {
-      btn.addEventListener('click', () => {
-        state.page = Math.max(1, state.page - 1);
+
+    function goToPage(newPage) {
+      newPage = Math.max(1, Math.min(totalPages, newPage));
+      if (newPage === state.page) return;
+      state.page = newPage;
+      if (serverPagination) {
+        serverPagination.onPageChange(newPage);
+      } else {
         applyAndRender();
         container.querySelector('.table-wrap').scrollIntoView({ behavior: 'smooth', block: 'start' });
-      });
+      }
+    }
+
+    container.querySelectorAll('.pagination-prev').forEach((btn) => {
+      btn.addEventListener('click', () => goToPage(state.page - 1));
     });
     container.querySelectorAll('.pagination-next').forEach((btn) => {
-      btn.addEventListener('click', () => {
-        state.page = Math.min(totalPages, state.page + 1);
-        applyAndRender();
-        container.querySelector('.table-wrap').scrollIntoView({ behavior: 'smooth', block: 'start' });
+      btn.addEventListener('click', () => goToPage(state.page + 1));
+    });
+    container.querySelectorAll('.pagination-page-input').forEach((input) => {
+      const jumpToInputValue = () => {
+        const parsed = parseInt(input.value, 10);
+        if (!parsed || parsed === state.page) {
+          input.value = state.page; // reset to current page if invalid/unchanged
+          return;
+        }
+        goToPage(parsed);
+      };
+      input.addEventListener('keydown', (e) => {
+        if (e.key !== 'Enter') return;
+        e.preventDefault();
+        jumpToInputValue();
       });
+      input.addEventListener('blur', jumpToInputValue);
     });
   }
 
@@ -2383,18 +2727,23 @@ function mountTradesTable(container, trades, opts = {}) {
       return 0;
     });
 
-    const totalRows = rows.length;
+    const totalRows = serverPagination ? serverPagination.totalRows : rows.length;
 
-    if (paginate) {
-      const totalPages = Math.max(1, Math.ceil(totalRows / pageSize));
-      if (state.page > totalPages) state.page = totalPages;
-      if (state.page < 1) state.page = 1;
+    if (usePagination) {
+      const totalPages = serverPagination
+        ? serverPagination.totalPages
+        : Math.max(1, Math.ceil(totalRows / pageSize));
+      if (!serverPagination) {
+        if (state.page > totalPages) state.page = totalPages;
+        if (state.page < 1) state.page = 1;
+        const startIdx = (state.page - 1) * pageSize;
+        rows = rows.slice(startIdx, startIdx + pageSize);
+      }
+      // serverPagination's `trades` is already just the current page's rows.
       renderPaginationBars(totalRows, totalPages);
-      const startIdx = (state.page - 1) * pageSize;
-      rows = rows.slice(startIdx, startIdx + pageSize);
     }
 
-    if (!totalRows) {
+    if (!rows.length) {
       tbody.innerHTML = `<tr><td colspan="${columns.length}"><div class="empty-state">${escapeHtml(
         emptyMessage
       )}</div></td></tr>`;
@@ -2418,6 +2767,13 @@ function mountTradesTable(container, trades, opts = {}) {
           btn.addEventListener('click', (e) => {
             e.stopPropagation();
             callNews(btn.dataset.ticker);
+          });
+        });
+
+        tbody.querySelectorAll('.records-btn').forEach((btn) => {
+          btn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            callRecords(btn.dataset.sourceUrl);
           });
         });
 
@@ -2709,6 +3065,22 @@ function callNews(ticker) {
   window.open(url, '_blank', 'noopener,noreferrer');
 }
 
+/**
+ * Opens the official filing this trade came from (the House Clerk/Senate
+ * PTR PDF itself, see backend's source_url) in a new browser tab -- the
+ * primary-source, human-readable record a trade row was extracted from,
+ * not a re-formatted summary. Left disclosed-but-unlinked rather than
+ * guessed at if a trade has no source_url on file (e.g. an older
+ * community/fallback source that didn't provide one).
+ */
+function callRecords(sourceUrl) {
+  if (!sourceUrl) {
+    showToast('No official record link is on file for this trade.');
+    return;
+  }
+  window.open(sourceUrl, '_blank', 'noopener,noreferrer');
+}
+
 /* ---------------------------------------------------------------------
  * 13. App bootstrap
  * ------------------------------------------------------------------- */
@@ -2728,6 +3100,8 @@ function init() {
   updateMeta();
   startBackgroundMetaWatcher();
   startNotificationsPolling();
+  checkForAppUpdate();
+  setInterval(checkForAppUpdate, 6 * 60 * 60 * 1000); // re-check every 6 hours
 
   window.addEventListener('hashchange', router);
   router();

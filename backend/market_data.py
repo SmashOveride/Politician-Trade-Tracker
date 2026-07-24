@@ -96,14 +96,25 @@ PRICE_HISTORY_YAHOO_RANGE = "max"
 PRICE_HISTORY_CACHE_TTL_SECONDS = 60 * 60 * 12  # 12 hours
 
 
-def get_price_history(ticker):
+def get_price_history(ticker, allow_network=True):
     """Returns a dict {date_str (YYYY-MM-DD): close_price} of daily closing
     prices for `ticker` going back as far as Yahoo Finance has data, or None
     if unavailable (network issue, unknown/delisted ticker, unexpected
     response shape, etc). Never raises -- profit/loss estimates are a
     nice-to-have annotation, not core data. Cached on disk (see
     PRICE_HISTORY_CACHE_TTL_SECONDS) since the same ticker's history is
-    reused across every politician who's traded it."""
+    reused across every politician who's traded it.
+
+    If allow_network=False, this only ever reads the on-disk cache --
+    including a cache past PRICE_HISTORY_CACHE_TTL_SECONDS, since a slightly
+    stale full price history is still far more useful than none for
+    estimating profit/loss on old trades -- and returns None immediately on
+    a cache miss rather than blocking on a live Yahoo request. Used by
+    listing endpoints that annotate many trades across many tickers at once
+    (e.g. /api/trades/recent), where a handful of not-yet-cached tickers
+    would otherwise make every page load wait on several sequential network
+    round-trips.
+    """
     if not ticker:
         return None
     symbol = ticker.strip().upper()
@@ -115,12 +126,16 @@ def get_price_history(ticker):
         try:
             with open(path, "r", encoding="utf-8") as f:
                 data = json.load(f)
-            if time.time() - data.get("fetched_at", 0) <= PRICE_HISTORY_CACHE_TTL_SECONDS:
+            if allow_network is False or time.time() - data.get("fetched_at", 0) <= PRICE_HISTORY_CACHE_TTL_SECONDS:
                 return data.get("series")
         except Exception:
             pass
 
+    if not allow_network:
+        return None
+
     url = YAHOO_CHART_URL.format(symbol=symbol)
+    series = None
     try:
         resp = requests.get(
             url,
@@ -133,23 +148,39 @@ def get_price_history(ticker):
         result = data["chart"]["result"][0]
         timestamps = result["timestamp"]
         closes = result["indicators"]["quote"][0]["close"]
+        series = {}
+        for ts, close in zip(timestamps, closes):
+            if close is None:
+                continue
+            date_str = datetime.fromtimestamp(ts, tz=timezone.utc).date().isoformat()
+            series[date_str] = close
+        series = series or None
     except Exception:
-        return None
+        series = None
 
-    series = {}
-    for ts, close in zip(timestamps, closes):
-        if close is None:
-            continue
-        date_str = datetime.fromtimestamp(ts, tz=timezone.utc).date().isoformat()
-        series[date_str] = close
-
-    if series:
-        try:
-            with open(path, "w", encoding="utf-8") as f:
-                json.dump({"fetched_at": time.time(), "series": series}, f)
-        except Exception:
-            pass
+    # Cache failures too (series=None), not just successes: an unknown/
+    # delisted symbol (common among tickers resolved from OCR'd paper-form
+    # asset names) otherwise re-blocks every page that asks about it for up
+    # to TIMEOUT seconds, every time, until it happens to succeed -- which
+    # it never will. The normal TTL applies, so a genuinely new symbol
+    # still gets retried eventually.
+    try:
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump({"fetched_at": time.time(), "series": series}, f)
+    except Exception:
+        pass
     return series
+
+
+def has_cached_price_history(ticker) -> bool:
+    """True if a price-history cache entry (success OR cached failure)
+    exists on disk for `ticker`, i.e. get_price_history(...,
+    allow_network=False) can answer instantly. Used to budget how many
+    live lookups a single request is allowed to trigger."""
+    if not ticker:
+        return False
+    symbol = ticker.strip().upper()
+    return bool(symbol) and os.path.exists(_price_history_cache_path(symbol))
 
 
 def get_index_series(index_key, range_key):

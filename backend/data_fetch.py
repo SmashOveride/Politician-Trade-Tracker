@@ -680,6 +680,27 @@ def refresh_data(progress_cb=None, since_date=None, cancel_check=None, tracker=N
         summary["steps"].append(f"Purged {purged} trades older than {TRADE_HISTORY_YEARS} years")
         report(f"Purged {purged} trades older than {TRADE_HISTORY_YEARS} years")
 
+    # 7. Resolve tickers for trades that disclosed only an asset NAME (the
+    # paper checkbox PTR form has no ticker column -- see
+    # backend/ticker_resolve.py) by matching names against the ticker-
+    # bearing e-filed trades already loaded above. Best-effort and strictly
+    # fill-blanks-only; runs after loading so this refresh's new rows are
+    # covered too.
+    try:
+        from . import ticker_resolve
+
+        with db.get_conn() as conn:
+            tr = ticker_resolve.resolve_missing_tickers(conn, progress_cb=report)
+        if tr["updated_rows"]:
+            summary["steps"].append(
+                f"Resolved tickers for {tr['updated_rows']} trades from asset names "
+                f"({tr['resolved_names']} distinct names)"
+            )
+            report(f"Resolved tickers for {tr['updated_rows']} name-only trades")
+        summary["tickers_resolved"] = tr
+    except Exception as e:
+        summary["errors"].append(f"Ticker resolution: {e}")
+
     db.set_meta("last_updated", datetime.now(timezone.utc).isoformat())
     db.set_meta("last_refresh_summary", json.dumps(summary))
     summary["finished_at"] = datetime.now(timezone.utc).isoformat()

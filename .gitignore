@@ -7,3 +7,32 @@ build/
 dist/
 *.spec.bak
 .DS_Store
+
+# Prebuilt hand-off folder (dist/PoliticianTradesTracker/ + start.bat,
+# consolidated into one flat folder for handing to end users) -- a large
+# generated build artifact like dist/ and build/ above, not source.
+RUN/
+
+# Bundled Tesseract OCR binary for the Windows build (see
+# packaging/fetch_tesseract_windows.py) -- fetched/prepared locally by
+# whoever builds the Windows package, not committed (it's a ~150MB binary
+# blob with its own upstream release cycle).
+packaging/vendor/
+
+# Generated fresh by windows.spec on every build from backend/version.py --
+# see the comment above _version_info_path in that spec file.
+packaging/_win_version_info.txt
+
+# Working files from the manual Khanna OCR-garble review (source PDF
+# snapshots, page/row/name worksheets) -- personal review scratch, not
+# app source, and superseded now that every row is resolved in the
+# database itself.
+khanna_garbled_review_with_pages*.csv
+khanna_unresolved_names.txt
+recheck_*.pdf
+
+# Zipped/hand-off copies of RUN/ built for testing distribution size --
+# same reasoning as RUN/ itself above, just under whatever name a given
+# test happened to use.
+Politician Trade Tracker.zip
+Politician Trade Tracker/

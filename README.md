@@ -86,6 +86,12 @@ no hosted server, no account, no installer, no admin rights required.
   politician directory (name/party/state/photo) over to the official
   Congress.gov API instead of the default community source. Entirely
   optional -- see "Optional Congress.gov data source" below.
+- Optional OCR fallback for the small number of House PTR filings that are
+  scanned images rather than machine-generated PDFs, so their trades aren't
+  silently skipped. Entirely optional -- see "Optional OCR support" below.
+- **Update App** button in Settings that checks GitHub for a newer
+  published release, switching to "Update Available" when one is found --
+  see "Checking for updates" below.
 
 **Important caveat:** all trade data comes from congressional disclosure
 filings, which are self-reported, delayed (up to 45 days by law), and only
@@ -377,6 +383,78 @@ needed.
 Build once on each target OS you want to support (PyInstaller does not
 cross-compile).
 
+## Antivirus / SmartScreen false positives
+
+Like most unsigned PyInstaller-built desktop apps, a freshly built
+`PoliticianTradesTracker` executable can occasionally get flagged by
+antivirus software or blocked by Windows SmartScreen / macOS Gatekeeper --
+almost always a false positive caused by *how the binary was built*, not
+anything the app actually does (it makes only the outbound HTTPS requests
+documented throughout this README, to the public data sources and GitHub
+listed above, and never modifies anything outside its own `data/` folder).
+A few things are done to keep this as unlikely as possible:
+
+- **No UPX compression.** All three `packaging/*.spec` files build with
+  `upx=False`. UPX-packed executables are one of the most common antivirus
+  heuristic triggers there is, since a lot of real malware also uses UPX to
+  evade signature-based scanning -- a heuristic engine has no way to tell
+  "legitimate app that happens to be UPX-packed" from "malware that happens
+  to be UPX-packed" apart from the packing itself. The smaller binary size
+  UPX would give isn't worth that risk here.
+- **Single-folder builds, not `--onefile`.** A `--onefile` build is itself a
+  self-extracting archive that unpacks to a temp directory at every launch --
+  a pattern real droppers use too, and one some heuristics flag on sight.
+  The `dist/PoliticianTradesTracker/` folder build these spec files produce
+  avoids that shape entirely.
+- **A real Windows version-info resource.** `packaging/windows.spec`
+  generates one on every build (from `backend/version.py`'s `APP_VERSION`,
+  so it can't drift) embedding a publisher name, product name, and version
+  number into the `.exe`. Legitimate Windows software almost always carries
+  this; leaving it blank is one more small, free signal heuristics can
+  weigh against an unknown binary.
+- **Ordinary, well-known dependencies only** (`requirements.txt`): Flask,
+  requests, pdfplumber, etc. -- nothing that itself tends to draw scrutiny
+  (obfuscators, packers, process-injection or credential-access libraries).
+
+**What actually fixes this, though, is code signing** -- everything above
+only reduces heuristic false-positive *risk*, it doesn't give the binary a
+verified identity the way a real signature does. If you're distributing
+built executables to other people (rather than everyone building their own
+from source, which needs none of this):
+
+- **Windows (Authenticode):** buy a code-signing certificate from any CA
+  (DigiCert, Sectigo, etc. -- an "EV" certificate builds SmartScreen
+  reputation faster than a standard one but costs more), then sign the
+  built `.exe` before zipping it up:
+  ```powershell
+  signtool sign /fd SHA256 /tr http://timestamp.digicert.com /td SHA256 ^
+    /f your-cert.pfx /p your-cert-password ^
+    dist\PoliticianTradesTracker\PoliticianTradesTracker.exe
+  ```
+  The `/tr` timestamp server matters -- it keeps the signature valid after
+  the certificate itself eventually expires.
+- **macOS (notarization):** with a paid Apple Developer account,
+  `codesign` the built `.app` and submit it to Apple's notary service; see
+  [Apple's notarization guide](https://developer.apple.com/documentation/security/notarizing_macos_software_before_distribution).
+  Until that's done, Gatekeeper will keep blocking first launch as
+  "unidentified developer" -- see the troubleshooting note under "Starting
+  the app" above for the one-time right-click-Open workaround.
+- **Publish checksums with every release.** Even without paying for a
+  certificate, publishing each build's SHA-256 alongside it lets anyone
+  verify their download wasn't corrupted or tampered with in transit:
+  ```bash
+  # macOS/Linux
+  shasum -a 256 dist/PoliticianTradesTracker/PoliticianTradesTracker
+  # Windows (PowerShell)
+  Get-FileHash dist\PoliticianTradesTracker\PoliticianTradesTracker.exe -Algorithm SHA256
+  ```
+  Paste the resulting hashes into the GitHub Release notes (see
+  "Versioning & releasing updates" below) next to each attached file.
+
+None of this is needed to just build and run the app for yourself from
+source -- it only matters if you're handing a *built binary* to someone
+else and want it to show up as trustworthy as possible on their machine.
+
 ## Project layout
 
 ```
@@ -387,17 +465,21 @@ politician-trades-app/
 ├── run.py                 # dev entry point (python run.py)
 ├── desktop.py              # packaged-app entry point (used by PyInstaller)
 ├── requirements.txt
+├── CHANGELOG.md             # version history -- see "Versioning & releasing updates" below
 ├── backend/
 │   ├── app.py              # Flask REST API + static file serving
 │   ├── launcher.py          # single-instance + fixed-port launch logic
 │   ├── db.py                # SQLite schema + connection helper
 │   ├── data_fetch.py        # runtime ingestion orchestration (legislators, committees, trade pipeline)
 │   ├── normalize.py         # shared amount/date/name normalization helpers
+│   ├── version.py           # APP_VERSION + GitHub repo -- single source of truth, see below
+│   ├── update_check.py      # checks GitHub Releases for a newer version (powers "Update App")
 │   ├── pipeline/            # congressional trade disclosure data collection pipeline
 │   │   ├── house_clerk.py       # primary source: House Clerk bulk ZIP + PTR PDF parser
 │   │   ├── senate_efd.py        # primary source: Senate eFD search + PTR HTML parser
 │   │   ├── secondary_sources.py # fallback: House/Senate Stock Watcher JSON dumps
 │   │   ├── custom_api_source.py # optional user-configured API, tried first if enabled
+│   │   ├── ocr.py               # optional OCR fallback for scanned/unreadable PDFs (Tesseract)
 │   │   ├── schema.py            # common normalized trade schema
 │   │   ├── dedup.py             # content-hash based filing dedup (processed_filings table)
 │   │   ├── monitoring.py        # logging + stale-data/parse-failure alerting
@@ -451,6 +533,113 @@ used by `committees_map.py`, so that part of the pipeline is unchanged.
 Your key is stored locally in `data/settings.json` (gitignored, never sent
 anywhere except as your own credential on your own requests to
 api.congress.gov) and is never displayed back in full once saved.
+
+## Optional OCR support
+
+The vast majority of House Clerk PTR (Periodic Transaction Report) filings
+are machine-generated PDFs with a normal text layer, which `backend/
+pipeline/house_clerk.py` parses directly -- no OCR needed. A small number of
+older or unusually-filed PTRs are instead **scanned images** with no text
+layer at all, and would otherwise be reported as an unrecognized format and
+skipped.
+
+If [Tesseract OCR](https://github.com/tesseract-ocr/tesseract) is available,
+the app automatically detects it and falls back to OCR for exactly those
+filings, so their trades are recovered instead of skipped. This is
+**entirely optional**: everything else in the app works fully without it,
+and no Tesseract available is treated exactly the same as before this
+feature existed -- the filing is simply reported as an unrecognized format
+(see `/api/pipeline/status`) and skipped, with no error shown to the user.
+
+**Packaged Windows builds already include Tesseract** (see
+`packaging/fetch_tesseract_windows.py` and `windows.spec`) -- nothing to
+install, OCR support just works. This only applies to the Windows build;
+running from source, or building for macOS/Linux, still relies on a
+system-installed Tesseract (see below).
+
+### Installing Tesseract (running from source, or macOS/Linux)
+
+The Python side (the `pytesseract` package in `requirements.txt`) is
+already installed with the rest of the app's dependencies -- only the
+Tesseract OCR engine itself (a separate system binary) needs installing:
+
+- **Windows:** Install the [UB Mannheim Tesseract build](https://github.com/UB-Mannheim/tesseract/wiki)
+  and make sure `tesseract.exe` is on your `PATH` (the installer offers to
+  do this for you). Only needed when running from source -- the packaged
+  build above already bundles this.
+- **macOS:** `brew install tesseract`
+- **Linux (Debian/Ubuntu):** `sudo apt install tesseract-ocr`
+
+No restart or configuration is needed afterward -- the app detects
+Tesseract automatically the next time it starts, and **Settings** shows
+whether OCR support is currently available.
+
+### Rebuilding the Windows package
+
+`packaging/vendor/tesseract-windows/` (gitignored, not committed -- it's a
+~150MB binary blob with its own upstream release cycle) needs staging once
+before building:
+
+```
+python packaging/fetch_tesseract_windows.py   # requires 7-Zip, one-time
+pyinstaller packaging/windows.spec
+```
+
+If the vendor folder isn't staged yet, the build still succeeds -- just
+without bundled OCR, same as running from source without Tesseract
+installed.
+
+## Checking for updates
+
+The **Settings** dropdown in the header includes an **Update App** button,
+above **APIs**. It periodically (and on every app launch) checks this
+project's [GitHub Releases page](https://github.com/SmashOveride/Politician-Trade-Tracker/releases)
+for a newer published version than the one currently running:
+
+- If you're already on the latest version, the button reads **Update App**
+  and just opens the releases page (so you can browse release notes or
+  manually check any time).
+- If a newer version has been published, the button switches to
+  **Update Available (vX.Y.Z)** and opens the same page, where you can
+  download the new build.
+
+This check is entirely read-only: it never downloads or installs anything
+automatically. Applying an update means downloading the latest release the
+same way you originally downloaded the app, same as any other portable
+desktop app. If GitHub is unreachable (offline, rate-limited, etc.), the
+button simply stays as **Update App** -- there is no error shown, since a
+failed check just means "nothing new found this time," not "something is
+wrong." Checks are cached for an hour server-side so opening Settings
+repeatedly doesn't hammer GitHub's API.
+
+## Versioning & releasing updates
+
+This app follows [Semantic Versioning](https://semver.org/)
+(`MAJOR.MINOR.PATCH`). The current version lives in a single place:
+`backend/version.py`'s `APP_VERSION`. It's surfaced in the UI footer, and
+compared against GitHub's published releases to power the "Update App" /
+"Update Available" button described above.
+
+To cut a new release:
+
+1. Bump `APP_VERSION` in `backend/version.py` -- `packaging/macos.spec`
+   reads it directly for `CFBundleShortVersionString`, so there's no
+   second place to update in sync by hand.
+2. Add a new entry at the top of `CHANGELOG.md` describing what changed,
+   following the existing format (`## [X.Y.Z] - YYYY-MM-DD`, with
+   `### Added` / `### Changed` / `### Fixed` subsections as needed).
+3. Commit those changes, then tag the commit to match
+   (`git tag vX.Y.Z && git push --tags`).
+4. Publish a [GitHub Release](https://github.com/SmashOveride/Politician-Trade-Tracker/releases/new)
+   from that tag, pasting in the same changelog entry as the release notes,
+   and attach the built executables/zips for each platform if you have them
+   -- ideally signed (see "Antivirus / SmartScreen false positives" above),
+   and with each attached file's SHA-256 checksum pasted into the release
+   notes either way.
+
+Once the release is published, every running copy of the app will notice
+it (within an hour, due to caching) via the "Update App" button turning
+into "Update Available" -- no separate announcement needed.
 
 ## Editing the committee/ticker -> industry mappings
 

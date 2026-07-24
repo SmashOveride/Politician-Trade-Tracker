@@ -262,6 +262,29 @@ _INDEX_MIGRATIONS = [
 _COLUMN_MIGRATIONS = [
     ("trades", "data_source", "TEXT"),   # which pipeline source produced this row, e.g. 'house_clerk'
     ("trades", "external_id", "TEXT"),  # source's own filing/report id, for traceability back to the original filing
+    # Whether this row came through OCR/image-based parsing rather than a
+    # filing's native embedded text (see pipeline/house_clerk.py's used_ocr
+    # and pipeline/checkbox_form.py). Only OCR-sourced rows are ever
+    # candidates for the "Unreadable -- See Records" display substitution
+    # (see asset_quality.py) -- natively parsed text is essentially never
+    # OCR gibberish, so gating on this avoids mislabeling a real but
+    # unusual-looking native name (e.g. "WIX.COM LTD CMN", which the
+    # garbled-text heuristic alone would false-positive on).
+    ("trades", "ocr_sourced", "INTEGER DEFAULT 0"),
+    # Set when a row's asset_description has been finalized by a human
+    # review pass (see backend/asset_quality.py's clean_asset_name and the
+    # Khanna asset-column cleanup) -- either a real company name identified
+    # from otherwise-garbled OCR text, or an "Unreadable -- See Records.
+    # P.x Rowy" pointer for text that couldn't be identified at all. Once
+    # set, loader.upsert_trades preserves the existing asset_description on
+    # every future re-parse of that filing instead of overwriting it with
+    # fresh (and possibly differently-garbled) OCR output -- without this,
+    # confirmed on a real refresh: the app's own hourly auto-refresh
+    # silently reprocessed filings and reverted hundreds of manually
+    # reviewed rows back to raw OCR garbage within hours of finishing the
+    # review. purge_stale_filing_rows also exempts reviewed rows from its
+    # stale-row cleanup for the same reason.
+    ("trades", "asset_description_reviewed", "INTEGER DEFAULT 0"),
     # Estimated profit/loss for a sale notification, computed from this
     # politician's own disclosed trade history and historical market prices
     # (see app.py's _annotate_realized_pnl) -- NULL when the sale never
@@ -280,7 +303,15 @@ def _ensure_column(conn, table, column, coltype):
 
 @contextmanager
 def get_conn():
-    conn = sqlite3.connect(DB_PATH)
+    # timeout=30: how long a writer waits on "database is locked" before
+    # giving up, rather than sqlite3's 5-second default. Matters once
+    # multiple writers can be active at once -- the live app's own
+    # auto-refresh thread plus any concurrent background reprocessing
+    # script (see scripts/reprocess_stale_filings.py, deliberately run as
+    # several parallel processes for the full-politician OCR review) --
+    # where the default was tight enough to occasionally raise "database is
+    # locked" on a perfectly normal, just-slightly-delayed write.
+    conn = sqlite3.connect(DB_PATH, timeout=30)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON")
     try:

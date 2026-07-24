@@ -29,7 +29,7 @@ import webbrowser
 
 import requests
 
-from . import db
+from . import db, shortcuts
 from .app import create_app
 
 # Arbitrary, distinctive high port, chosen to avoid common collisions with
@@ -180,6 +180,15 @@ def launch():
         "automatically) even after you close this browser tab. Press Ctrl+C "
         "here to stop it."
     )
+
+    # One-time native popup (Windows packaged build only -- see
+    # shortcuts.py) offering to add a Desktop icon / Start Menu entry, so a
+    # user who received a prebuilt copy of the app doesn't have to keep
+    # navigating back to this folder to relaunch it. No-ops instantly on
+    # every other platform/launch mode, and never blocks/breaks a normal
+    # launch if it fails for any reason.
+    shortcuts.maybe_prompt_for_shortcuts()
+
     try:
         while True:
             time.sleep(1)

@@ -18,7 +18,7 @@ from typing import Any, Dict
 from flask import Flask, jsonify, request, send_from_directory
 from flask_cors import CORS
 
-from . import db
+from . import asset_quality, db
 from .data_fetch import default_refresh_cutoff, min_refresh_since_date, refresh_data
 from .pipeline.errors import RefreshCancelled
 from .pipeline.progress import ProgressTracker
@@ -38,7 +38,9 @@ from .settings import (
     set_enabled_source_ids,
 )
 from .ticker_sectors import get_sectors_for_ticker
-from .market_data import get_index_series, get_price_history
+from .market_data import get_index_series, get_price_history, has_cached_price_history
+from .update_check import check_for_update
+from .version import APP_VERSION
 
 FRONTEND_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "frontend")
 
@@ -228,7 +230,44 @@ def _fetch_committees_by_bioguide(conn, bioguide_ids=None):
 
 
 def _trade_row_to_dict(row):
-    return dict(row)
+    d = dict(row)
+    # Substitute an honest "Unreadable" label for the raw OCR text on rows
+    # where it's actually gibberish (see asset_quality.is_garbled) -- the
+    # DB keeps the real OCR text untouched for later manual review/ticker
+    # matching (see ticker_resolve.py), this only affects what's displayed.
+    # Gated on ocr_sourced so this can never touch natively parsed e-filed
+    # text (which is essentially never gibberish, but can look unusual
+    # enough -- e.g. "WIX.COM LTD CMN" -- to false-positive the heuristic),
+    # and skipped once a ticker's been resolved (a row with a known ticker
+    # is meaningfully identified regardless of how rough its raw text is).
+    # Also skipped once asset_description already starts with "Unreadable"
+    # -- e.g. a manually reviewed row stamped "Unreadable. See record. P.3
+    # Row4" -- since that normal-sentence-case text would otherwise trip
+    # is_garbled()'s own lowercase-ratio check and get silently overwritten
+    # with the generic label, destroying the specific page/row pointer.
+    #
+    # And skipped entirely once asset_description_reviewed is set: that
+    # column means this row's text has already been finalized by a review
+    # pass (see the Khanna asset-column cleanup) into clean, Title-Cased
+    # presentation text ("Walmart Inc") rather than the raw ALL-CAPS OCR
+    # text is_garbled() was designed to judge. Title Case is inherently
+    # majority-lowercase by letter count, which trips is_garbled()'s own
+    # lowercase-ratio check on nearly every real name -- confirmed on real
+    # data: without this guard, 608 already-cleaned Khanna rows ("Realty
+    # Income Corporation", "Ge Healthcare Technologies Inc", etc.) were
+    # silently getting overwritten back to the generic label on every page
+    # load, undoing the entire review pass at display time even though the
+    # correct text was sitting right there in the database.
+    desc = d.get("asset_description") or ""
+    if (
+        d.get("ocr_sourced")
+        and not d.get("ticker")
+        and not d.get("asset_description_reviewed")
+        and not desc.startswith("Unreadable")
+        and asset_quality.is_garbled(desc)
+    ):
+        d["asset_description"] = asset_quality.UNREADABLE_ASSET_LABEL
+    return d
 
 
 def _annotate_committee_conflicts(conn, trades):
@@ -270,11 +309,19 @@ def _nearest_close_on_or_before(price_series, date_str):
     return price_series[max(candidates)]
 
 
-def _annotate_realized_pnl(conn, trades):
+def _annotate_realized_pnl(conn, trades, allow_network=True):
     """Attaches `profit_loss` (estimated $ gain/loss, may be negative) and
     `profit_loss_pct` to every sale ('sale' or 'sale_partial') trade dict in
     `trades`, in place. Left as None on a sale when there's nothing to
     compare it against, and left off purchase/exchange trades entirely.
+
+    allow_network=False restricts price lookups to whatever's already
+    cached (see market_data.get_price_history), so a page of trades touching
+    several not-yet-cached tickers doesn't block on live Yahoo requests --
+    used by /api/trades/recent, which pages through the entire dataset and
+    can hit a fresh ticker on every page. Sales for a not-yet-cached ticker
+    just show no profit/loss until that ticker's history gets fetched
+    elsewhere (e.g. viewing its stock detail page, or the portfolio chart).
 
     Method: for each politician + ticker pair that has at least one sale
     among `trades`, this pulls that politician's *complete* trade history
@@ -308,8 +355,24 @@ def _annotate_realized_pnl(conn, trades):
     if not relevant_keys:
         return trades
 
+    # Budget how many tickers a single request may fetch price history for
+    # over the network. Politicians who file the paper PTR form can have
+    # hundreds of distinct (name-resolved) tickers on one detail page --
+    # fetching them all live serially took the page from seconds to
+    # minutes. Cached tickers (including cached failures, see
+    # market_data.get_price_history) are always used; uncached ones beyond
+    # the budget just show no P/L this visit and get picked up on a later
+    # one as the cache warms.
+    MAX_LIVE_PRICE_FETCHES = 25
     tickers = {ticker for (_key, ticker) in relevant_keys}
-    price_history_by_ticker = {ticker: get_price_history(ticker) for ticker in tickers}
+    live_budget = MAX_LIVE_PRICE_FETCHES if allow_network else 0
+    price_history_by_ticker = {}
+    for ticker in tickers:
+        if has_cached_price_history(ticker) or live_budget <= 0:
+            price_history_by_ticker[ticker] = get_price_history(ticker, allow_network=False)
+        else:
+            live_budget -= 1
+            price_history_by_ticker[ticker] = get_price_history(ticker)
 
     # Pull each relevant politician+ticker pair's *complete* trade history
     # (not just the currently-displayed subset) so FIFO matching is correct
@@ -564,60 +627,150 @@ def list_trades():
     return jsonify(trades)
 
 
+DEFAULT_RECENT_TRADES_PAGE_SIZE = 50
+MAX_RECENT_TRADES_PAGE_SIZE = 200
+
+# Standard STOCK Act disclosure amount buckets, identified by their floor
+# dollar value -- parse_amount_range always extracts that floor into
+# amount_min exactly, even when the bucket's display text (amount_range) has
+# minor OCR garbling, so filtering on amount_min is robust where matching
+# amount_range text wouldn't be. Kept in sync by hand with the equivalent
+# list in frontend/app.js (AMOUNT_BUCKETS).
+RECENT_TRADES_AMOUNT_BUCKET_FLOORS = {
+    1001, 15001, 50001, 100001, 250001, 500001, 1000001, 5000001, 25000001, 50000000,
+}
+
+
 @app.route("/api/trades/recent")
 def list_recent_trades():
-    """Returns the most recently *disclosed* trades (i.e. new filings), which
-    is what this app shows on its home screen. This is deliberately keyed off
-    disclosure_date rather than transaction_date -- members of Congress often
-    file weeks after the actual trade, so "newest disclosures" is what's
-    actually new/actionable information as of today, not the underlying
-    (older) trade date.
+    """Returns every disclosed trade on file, most recently *disclosed*
+    first (i.e. newest filings first), paginated. This is deliberately keyed
+    off disclosure_date rather than transaction_date -- members of Congress
+    often file weeks after the actual trade, so "newest disclosures" is
+    what's actually new/actionable information as of today, not the
+    underlying (older) trade date. Trades with no disclosure_date on file
+    can't be placed in this ordering and are excluded.
 
-    `days` controls how many distinct calendar days of disclosures (counting
-    back from the most recent disclosure date on file) to include.
+    Query params:
+      - page (default 1)
+      - page_size (default 50, max 200)
+      - start_date / end_date: bound transaction_date (not disclosure_date --
+        a user filtering "trades in March" means the trade itself, not
+        whenever it happened to be filed)
+      - type: comma-separated transaction_type values (purchase/sale/
+        sale_partial/exchange)
+      - party: comma-separated politicians.party values (Democrat/
+        Republican/Independent)
+      - amount_buckets: comma-separated bucket-floor dollar values (see
+        RECENT_TRADES_AMOUNT_BUCKET_FLOORS) -- matched against amount_min
+        exactly, so only recognized buckets are ever passed through
+      - search: matched against ticker or asset_description
     """
     try:
-        days = max(1, min(int(request.args.get("days", 7)), 90))
+        page = max(1, int(request.args.get("page", 1)))
     except ValueError:
-        days = 7
+        page = 1
+    try:
+        page_size = max(1, min(int(request.args.get("page_size", DEFAULT_RECENT_TRADES_PAGE_SIZE)), MAX_RECENT_TRADES_PAGE_SIZE))
+    except ValueError:
+        page_size = DEFAULT_RECENT_TRADES_PAGE_SIZE
+
+    where = ["disclosure_date IS NOT NULL", "disclosure_date != ''"]
+    params: list = []
+
+    start_date = request.args.get("start_date")
+    if start_date:
+        where.append("transaction_date >= ?")
+        params.append(start_date)
+    end_date = request.args.get("end_date")
+    if end_date:
+        where.append("transaction_date <= ?")
+        params.append(end_date)
+
+    types = [t.strip() for t in (request.args.get("type") or "").split(",") if t.strip()]
+    if types:
+        where.append(f"transaction_type IN ({','.join('?' for _ in types)})")
+        params.extend(types)
+
+    parties = [p.strip() for p in (request.args.get("party") or "").split(",") if p.strip()]
+    if parties:
+        where.append(
+            f"bioguide_id IN (SELECT bioguide_id FROM politicians WHERE party IN ({','.join('?' for _ in parties)}))"
+        )
+        params.extend(parties)
+
+    bucket_floors = []
+    for raw in (request.args.get("amount_buckets") or "").split(","):
+        raw = raw.strip()
+        if not raw:
+            continue
+        try:
+            val = float(raw)
+        except ValueError:
+            continue
+        if val in RECENT_TRADES_AMOUNT_BUCKET_FLOORS:
+            bucket_floors.append(val)
+    if bucket_floors:
+        where.append(f"amount_min IN ({','.join('?' for _ in bucket_floors)})")
+        params.extend(bucket_floors)
+
+    search = (request.args.get("search") or "").strip()
+    if search:
+        where.append("(ticker LIKE ? OR asset_description LIKE ?)")
+        like = f"%{search}%"
+        params.extend([like, like])
+
+    where_sql = " AND ".join(where)
 
     with db.get_conn() as conn:
+        total_row = conn.execute(f"SELECT COUNT(*) as c FROM trades WHERE {where_sql}", params).fetchone()
+        total = total_row["c"] if total_row else 0
+
+        # Always reflects the freshest disclosure on file overall, regardless
+        # of the current filter selection -- this is "how fresh is the
+        # underlying data", not "latest disclosure among filtered results".
         max_row = conn.execute(
             "SELECT MAX(disclosure_date) as max_date FROM trades "
             "WHERE disclosure_date IS NOT NULL AND disclosure_date != ''"
         ).fetchone()
         max_date = max_row["max_date"] if max_row else None
 
-        if not max_date:
-            return jsonify({"trades": [], "disclosure_dates": [], "latest_disclosure_date": None})
+        if total == 0:
+            return jsonify(
+                {"trades": [], "total": 0, "page": 1, "page_size": page_size, "total_pages": 1, "latest_disclosure_date": max_date}
+            )
 
-        start_date = (
-            datetime.strptime(max_date, "%Y-%m-%d").date() - timedelta(days=days - 1)
-        ).isoformat()
+        total_pages = max(1, (total + page_size - 1) // page_size)
+        if page > total_pages:
+            page = total_pages
+        offset = (page - 1) * page_size
 
         rows = conn.execute(
-            """
+            f"""
             SELECT * FROM trades
-            WHERE disclosure_date >= ? AND disclosure_date <= ?
-            ORDER BY disclosure_date DESC, transaction_date DESC
-            LIMIT 2000
+            WHERE {where_sql}
+            ORDER BY disclosure_date DESC, transaction_date DESC, id DESC
+            LIMIT ? OFFSET ?
             """,
-            (start_date, max_date),
+            params + [page_size, offset],
         ).fetchall()
 
         trades = [_trade_row_to_dict(r) for r in rows]
         _annotate_committee_conflicts(conn, trades)
         _annotate_party(conn, trades)
-        _annotate_realized_pnl(conn, trades)
-
-    disclosure_dates = sorted({t["disclosure_date"] for t in trades if t["disclosure_date"]}, reverse=True)
+        # Cache-only price lookups here (see _annotate_realized_pnl) -- this
+        # endpoint pages through the whole dataset, so blocking on a live
+        # Yahoo request for every not-yet-cached ticker made page turns slow.
+        _annotate_realized_pnl(conn, trades, allow_network=False)
 
     return jsonify(
         {
             "trades": trades,
-            "disclosure_dates": disclosure_dates,
+            "total": total,
+            "page": page,
+            "page_size": page_size,
+            "total_pages": total_pages,
             "latest_disclosure_date": max_date,
-            "days": days,
         }
     )
 
@@ -1408,6 +1561,7 @@ def get_meta():
             "refreshing": _refresh_status["running"],
             "last_message": _refresh_status["last_message"],
             "legislator_source": db.get_meta("legislator_source"),
+            "app_version": APP_VERSION,
             # Lets the UI's custom start-date picker (next to "Refresh Data")
             # default to, and not go more recent than, the normal 12-month
             # window, while bounding how far back a custom date can go to the
@@ -1446,6 +1600,21 @@ def pipeline_status():
 
 
 # ---------------------------------------------------------------------------
+# App version / update check (see backend/version.py, backend/update_check.py)
+#
+# Entirely read-only and best-effort: this only checks GitHub's public
+# Releases API for a newer published version than the one currently
+# running, and never downloads or installs anything itself -- the
+# "Update Available" button in Settings just opens the releases page in
+# the user's browser, same as the user could do manually.
+# ---------------------------------------------------------------------------
+
+@app.route("/api/version/check")
+def version_check():
+    return jsonify(check_for_update())
+
+
+# ---------------------------------------------------------------------------
 # Settings (optional Congress.gov / api.data.gov API key)
 # ---------------------------------------------------------------------------
 
@@ -1454,6 +1623,8 @@ def get_settings():
     """Never returns the full API key -- only whether one is configured and a
     masked preview, so the frontend can display status without exposing the
     secret back over (loopback-only, but still) HTTP."""
+    from .pipeline import ocr as pipeline_ocr
+
     key = get_congress_api_key()
     return jsonify(
         {
@@ -1461,6 +1632,7 @@ def get_settings():
             "congress_gov_api_key_masked": mask_key(key),
             "legislator_source": db.get_meta("legislator_source"),
             "auto_refresh_minutes": get_auto_refresh_minutes(),
+            "ocr_available": pipeline_ocr.is_available(),
         }
     )
 

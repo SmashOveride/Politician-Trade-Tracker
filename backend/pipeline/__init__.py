@@ -15,6 +15,12 @@ described (as future work) in backend/settings.py:
 - backend/pipeline/secondary_sources.py -- secondary/API sources (House/
   Senate Stock Watcher JSON dumps) used as a fallback whenever a primary
   source's bulk download is unreachable or fails to parse.
+- backend/pipeline/ocr.py -- optional OCR fallback (via the pytesseract
+  binding to the Tesseract OCR engine) for House PTR PDFs filed as scanned
+  images with no text layer at all, which house_clerk.py's normal
+  text-based table parser can't read. Entirely optional and degrades
+  gracefully: if Tesseract isn't installed, those (rare) filings are
+  reported as an unrecognized format exactly as before this existed.
 - backend/pipeline/dedup.py -- content hashing / checksum bookkeeping so a
   filing that has already been successfully parsed is never re-fetched or
   re-parsed unless its content has actually changed.

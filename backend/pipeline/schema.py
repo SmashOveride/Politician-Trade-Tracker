@@ -30,6 +30,7 @@ TRADE_FIELDS = (
     "source_url",
     "data_source",
     "external_id",
+    "ocr_sourced",
 )
 
 
@@ -43,6 +44,12 @@ class RawFiling:
     chamber: str           # 'house' | 'senate'
     source_url: str
     disclosure_date: str   # source's raw disclosure/filing date string
+    # Whether this WHOLE FILING was read via OCR/image analysis rather than
+    # native embedded text (see house_clerk.py's used_ocr and
+    # checkbox_form.py) -- applies uniformly to every transaction the
+    # filing produces. Used by asset_quality.py to decide which rows are
+    # even eligible for the "Unreadable" display substitution.
+    ocr_sourced: bool = False
 
 
 def normalize_trade(filing: RawFiling, raw_tx: Dict[str, Any], line_index: int = 0) -> Dict[str, Any]:
@@ -78,4 +85,5 @@ def normalize_trade(filing: RawFiling, raw_tx: Dict[str, Any], line_index: int =
         "source_url": filing.source_url,
         "data_source": filing.source,
         "external_id": f"{filing.filing_id}#{line_index}",
+        "ocr_sourced": bool(filing.ocr_sourced),
     }

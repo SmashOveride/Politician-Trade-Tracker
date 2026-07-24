@@ -15,7 +15,7 @@ from typing import Any, Dict
 from . import custom_api_source, house_clerk, monitoring, secondary_sources, senate_efd
 from .errors import check_cancelled
 from .http_client import build_session
-from .loader import attribute_and_filter, upsert_trades
+from .loader import attribute_and_filter, purge_stale_filing_rows, upsert_trades
 
 ALL_SOURCE_IDS = (
     house_clerk.SOURCE_ID,
@@ -119,6 +119,9 @@ def run_pipeline(
 
     house_trades = attribute_and_filter(house_trades, bioguide_lookup_by_name, cutoff)
     house_loaded = upsert_trades(house_trades)
+    stale_purged = purge_stale_filing_rows(house_clerk.SOURCE_ID)
+    if stale_purged:
+        report(f"House: removed {stale_purged} stale rows from re-parsed filings")
     report(f"House: {house_loaded} trades loaded/updated")
 
     # --- Senate ----------------------------------------------------------
