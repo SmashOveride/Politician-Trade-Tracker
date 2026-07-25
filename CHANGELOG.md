@@ -6,6 +6,40 @@ All notable changes to this project are documented here. This project follows
 The current version lives in `backend/version.py` (`APP_VERSION`) -- see
 "Versioning & releasing updates" in README.md for the full release checklist.
 
+## [1.3.0] - 2026-07-25
+### Added
+- **Politician Trade Tracker Lite**: a second, ~35MB build (versus the full
+  build's ~238MB) that never bundles the live parsing/OCR pipeline
+  (pdfplumber, lxml, pytesseract, PIL, pypdfium2, Tesseract itself) --
+  instead it downloads a pre-built, pre-OCR'd database snapshot. Which
+  code path runs falls out naturally from whether those dependencies are
+  actually present (`backend/data_fetch.py`'s `pipeline_available()`), not
+  a separate mode flag, so the full build's behavior is unchanged.
+- Automatic hourly data-snapshot publishing: `scripts/publish_snapshot.py`
+  runs the same pipeline the full app already uses, then publishes the
+  result (gzipped, checksummed, schema-versioned) to a fixed `latest-data`
+  GitHub Release. Runs on a schedule via
+  `.github/workflows/publish-data.yml`, on GitHub's own infrastructure --
+  free for this public repo, nothing needs to stay running on anyone's
+  machine. `backend/snapshot_download.py` is the client side: verifies the
+  download's checksum and schema version before atomically adopting it.
+- macOS builds (full + Lite) via `.github/workflows/build-macos.yml`,
+  using GitHub's real macOS runners -- PyInstaller can't cross-compile, so
+  this is what makes a Mac build possible without owning a Mac at all.
+  Triggered manually, or automatically on every version tag push, which
+  attaches the built `.app` zips directly to that release.
+
+### Changed
+- Packaged Windows builds no longer duplicate the entire bundled Tesseract
+  package (every DLL) between `_internal/tesseract/` and the top level of
+  `_internal` -- a PyInstaller quirk that was pure dead weight, ~150MB of
+  it. `windows.spec` now strips the duplicates automatically on every
+  build (389MB -> 238MB, confirmed).
+- `backend/db.py`'s SQLite connections use a 30-second busy timeout
+  (was the 5-second default), since multiple writers can now legitimately
+  be active at once (the app's own auto-refresh, plus e.g. the snapshot
+  publishing job).
+
 ## [1.2.0] - 2026-07-24
 ### Added
 - Left-rail filter panel on Recent Disclosures (date range, trade type,
