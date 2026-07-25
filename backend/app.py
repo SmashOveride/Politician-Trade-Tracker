@@ -19,9 +19,10 @@ from flask import Flask, jsonify, request, send_from_directory
 from flask_cors import CORS
 
 from . import asset_quality, db
-from .data_fetch import default_refresh_cutoff, min_refresh_since_date, refresh_data
+from .data_fetch import default_refresh_cutoff, min_refresh_since_date, pipeline_available, refresh_data
 from .pipeline.errors import RefreshCancelled
 from .pipeline.progress import ProgressTracker
+from .snapshot_download import sync_snapshot
 from .settings import (
     DEFAULT_API_SOURCES,
     add_custom_api_source,
@@ -101,10 +102,27 @@ def _start_refresh_job(since_date=None):
                 def progress(msg):
                     _refresh_status["last_message"] = msg
 
-                summary = refresh_data(
-                    progress_cb=progress, since_date=since_date,
-                    cancel_check=_refresh_cancel_event.is_set, tracker=_refresh_tracker,
-                )
+                # The Lite build never bundles the live parsing pipeline's
+                # dependencies (pdfplumber/lxml/pytesseract/etc -- see
+                # data_fetch.pipeline_available and backend/snapshot_download.py),
+                # so it downloads a pre-built snapshot instead of parsing
+                # anything itself. The full build keeps doing exactly what
+                # it always has -- pipeline_available() is unconditionally
+                # True there, so this branch is unreachable and behavior is
+                # unchanged. Which path runs is decided purely by which
+                # dependencies are actually present, not a separate mode flag.
+                if pipeline_available():
+                    summary = refresh_data(
+                        progress_cb=progress, since_date=since_date,
+                        cancel_check=_refresh_cancel_event.is_set, tracker=_refresh_tracker,
+                    )
+                else:
+                    progress("Checking for an updated data snapshot...")
+                    summary = sync_snapshot()
+                    if summary.get("errors"):
+                        progress(f"Snapshot update failed: {'; '.join(summary['errors'])}")
+                    else:
+                        progress(summary["steps"][-1] if summary.get("steps") else "Up to date")
                 _refresh_status["last_message"] = "Refresh complete"
                 _refresh_status["last_summary"] = summary
                 try:
@@ -1623,7 +1641,16 @@ def get_settings():
     """Never returns the full API key -- only whether one is configured and a
     masked preview, so the frontend can display status without exposing the
     secret back over (loopback-only, but still) HTTP."""
-    from .pipeline import ocr as pipeline_ocr
+    try:
+        # The Lite build never bundles this module at all (it hard-imports
+        # pdfplumber itself, in turn excluded -- see packaging/windows_lite.spec),
+        # so OCR is simply never available there, same as pipeline_available()
+        # being False for the same underlying reason.
+        from .pipeline import ocr as pipeline_ocr
+
+        ocr_available = pipeline_ocr.is_available()
+    except ImportError:
+        ocr_available = False
 
     key = get_congress_api_key()
     return jsonify(
@@ -1632,7 +1659,7 @@ def get_settings():
             "congress_gov_api_key_masked": mask_key(key),
             "legislator_source": db.get_meta("legislator_source"),
             "auto_refresh_minutes": get_auto_refresh_minutes(),
-            "ocr_available": pipeline_ocr.is_available(),
+            "ocr_available": ocr_available,
         }
     )
 

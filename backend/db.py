@@ -10,6 +10,19 @@ import os
 import sqlite3
 from contextlib import contextmanager
 
+# Bumped whenever the trades/politicians schema changes in a way that isn't
+# just "add a column with a safe default" (which _ensure_column/
+# _COLUMN_MIGRATIONS below already handle transparently regardless of this
+# number) -- e.g. a column being renamed, repurposed, or removed. Stamped
+# into every published data snapshot's meta table (see
+# scripts/publish_snapshot.py) so backend/snapshot_download.py can refuse a
+# snapshot whose schema this build doesn't know how to read, rather than
+# risking a silent misread. A snapshot's version being <= this one is
+# always fine (the migrations below bring it up to date); only a *higher*
+# version -- from a future app release -- is treated as incompatible by an
+# older client.
+SCHEMA_VERSION = 1
+
 # Where the .db file lives. When packaged with PyInstaller we want it to sit
 # next to the executable so users can see/back up their data; during normal
 # `python run.py` development it just lives in the project's data/ folder.

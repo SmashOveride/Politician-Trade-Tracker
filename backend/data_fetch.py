@@ -58,9 +58,18 @@ from . import db
 from .committees_map import get_sectors_for_thomas_id
 from .normalize import clean_name_tokens as _clean_name_tokens
 from .pipeline.errors import RefreshCancelled, check_cancelled
-from .pipeline.orchestrator import run_pipeline
 from .settings import get_congress_api_key, get_custom_api_sources
 from .us_states import state_name_to_code
+
+# NOTE: pipeline.orchestrator.run_pipeline is deliberately imported lazily,
+# inside refresh_data() below, rather than up here at module level. It
+# pulls in house_clerk.py -> pdfplumber (and, transitively, lxml/PIL/
+# pytesseract) -- fine for the full build, but the Lite build (see
+# backend/snapshot_download.py) never bundles those at all. If this import
+# were unconditional here, just importing data_fetch itself (which app.py
+# does at startup) would crash the Lite build immediately with a
+# ModuleNotFoundError before it ever got a chance to use the snapshot
+# download path instead.
 
 LEGISLATORS_URL = (
     "https://raw.githubusercontent.com/unitedstates/congress-legislators/main/legislators-current.yaml"
@@ -240,6 +249,26 @@ TRADE_HISTORY_YEARS = 10
 # refresh_data's `since_date` param and _resolve_refresh_cutoff below), up
 # to the TRADE_HISTORY_YEARS retention cap above.
 DEFAULT_REFRESH_LOOKBACK_DAYS = 365
+
+_pipeline_available = None  # cached result, see pipeline_available() below
+
+
+def pipeline_available():
+    """True if the live parsing pipeline (pdfplumber/lxml/pytesseract/etc,
+    via pipeline.orchestrator) can actually be imported in this build.
+    Always True in the full build; always False in the Lite build, which
+    never bundles those dependencies at all (see backend/snapshot_download.py,
+    which is what Lite uses instead). Checked once and cached -- whether the
+    import succeeds can't change over the life of a running process."""
+    global _pipeline_available
+    if _pipeline_available is None:
+        try:
+            from .pipeline.orchestrator import run_pipeline  # noqa: F401
+
+            _pipeline_available = True
+        except ImportError:
+            _pipeline_available = False
+    return _pipeline_available
 
 
 def _trade_history_cutoff():
@@ -647,6 +676,8 @@ def refresh_data(progress_cb=None, since_date=None, cancel_check=None, tracker=N
     # /api/pipeline/status), and network calls retry transient failures
     # with backoff (see pipeline/http_client.py).
     try:
+        from .pipeline.orchestrator import run_pipeline  # see the module-level NOTE above
+
         report("Checking congressional trade disclosures (House Clerk / Senate eFD)...")
         custom_sources = [s for s in get_custom_api_sources() if s.get("enabled")]
         pipeline_summary = run_pipeline(

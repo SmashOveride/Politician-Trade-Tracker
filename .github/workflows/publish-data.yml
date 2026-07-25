@@ -1,0 +1,62 @@
+# Runs the exact same data pipeline the desktop app's own "Refresh Data"
+# uses (see scripts/publish_snapshot.py), centrally and on a schedule, and
+# publishes the result as a GitHub Release the "Lite" app downloads from
+# instead of parsing/OCR-ing anything itself (backend/snapshot_download.py).
+#
+# Runs on GitHub-hosted infrastructure, not any particular person's
+# computer -- nothing needs to stay running for this to keep working.
+# Free for public repositories, with a 6-hour hard cap per run (see
+# timeout-minutes below for a much tighter safety margin, since a normal
+# incremental run should take minutes, not hours -- the only time this
+# would legitimately run long is the very first publish ever, or after a
+# long gap, when there's a real backlog of unprocessed filings to catch
+# up on).
+name: Publish data snapshot
+
+on:
+  schedule:
+    # Every hour, on the hour -- matches the desktop app's own default
+    # auto-refresh interval (see backend/settings.py's
+    # DEFAULT_AUTO_REFRESH_MINUTES). Cron is always UTC regardless of
+    # anyone's local timezone.
+    - cron: "0 * * * *"
+  # Lets this be triggered manually from the Actions tab (Run workflow
+  # button) -- handy for testing without waiting for the next hour to
+  # roll around, and for a one-off re-run after fixing a failure.
+  workflow_dispatch: {}
+
+# Required so the automatically-provided GITHUB_TOKEN (see
+# scripts/publish_snapshot.py's _auth_headers) is allowed to create/update
+# releases in this repo -- the default token permissions are read-only.
+permissions:
+  contents: write
+
+# If a run is somehow still going when the next scheduled trigger fires
+# (shouldn't normally happen given the timeout below, but a large one-off
+# backlog run might overlap an hourly tick), queue the new one rather than
+# letting two instances race to publish the same release at once.
+concurrency:
+  group: publish-data
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install Tesseract OCR
+        run: sudo apt-get update && sudo apt-get install -y tesseract-ocr
+
+      - name: Install Python dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run ingestion + publish
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: python scripts/publish_snapshot.py

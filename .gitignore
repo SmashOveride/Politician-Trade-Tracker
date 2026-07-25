@@ -19,9 +19,11 @@ RUN/
 # blob with its own upstream release cycle).
 packaging/vendor/
 
-# Generated fresh by windows.spec on every build from backend/version.py --
-# see the comment above _version_info_path in that spec file.
+# Generated fresh by windows.spec/windows_lite.spec on every build from
+# backend/version.py -- see the comment above _version_info_path in those
+# spec files.
 packaging/_win_version_info.txt
+packaging/_win_version_info_lite.txt
 
 # Working files from the manual Khanna OCR-garble review (source PDF
 # snapshots, page/row/name worksheets) -- personal review scratch, not
