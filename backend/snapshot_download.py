@@ -49,8 +49,24 @@ def _get_release():
         return None
 
 
-def _last_synced_published_at():
-    return settings.load_settings().get("snapshot_last_synced_published_at")
+def _last_synced_asset_updated_at():
+    return settings.load_settings().get("snapshot_last_synced_asset_updated_at")
+
+
+def _db_asset_updated_at(release):
+    """The DB asset's own updated_at -- NOT release['published_at'], which
+    GitHub freezes to whenever this release was first created and never
+    changes on subsequent asset re-uploads (confirmed on the real
+    'latest-data' release: publishing new data hours later left
+    published_at completely unchanged). Since scripts/publish_snapshot.py
+    reuses this same release forever rather than creating a new one each
+    time, published_at is useless as a "is there something new" signal --
+    every asset's own updated_at timestamp genuinely changes on each
+    re-upload and is what this actually needs to compare against."""
+    for asset in release.get("assets", []):
+        if asset["name"] == DB_ASSET_NAME:
+            return asset.get("updated_at")
+    return None
 
 
 def check_for_update():
@@ -61,7 +77,7 @@ def check_for_update():
     release = _get_release()
     if not release:
         return None, False
-    return release, release.get("published_at") != _last_synced_published_at()
+    return release, _db_asset_updated_at(release) != _last_synced_asset_updated_at()
 
 
 def sync_snapshot(force=False):
@@ -144,10 +160,11 @@ def sync_snapshot(force=False):
             os.remove(temp_path)
 
     db.init_db()  # applies any pending column migrations to the newly-adopted snapshot
-    settings.save_settings({"snapshot_last_synced_published_at": release.get("published_at")})
+    asset_updated_at = _db_asset_updated_at(release)
+    settings.save_settings({"snapshot_last_synced_asset_updated_at": asset_updated_at})
 
     summary["steps"].append(
-        f"Downloaded and adopted data snapshot published {release.get('published_at')} "
+        f"Downloaded and adopted data snapshot published {asset_updated_at} "
         f"({len(gz_bytes):,} bytes)."
     )
     return summary
