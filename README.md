@@ -354,6 +354,13 @@ Build on an actual Mac -- PyInstaller does not cross-compile, and Intel
 vs. Apple Silicon builds are only guaranteed to run on the architecture
 they were built on (build on each if you need to support both).
 
+**Don't have a Mac?** `.github/workflows/build-macos.yml` builds both the
+full app and Lite (see below) on a real Mac GitHub provisions in the
+cloud -- free for this public repo, no Apple hardware needed on your end.
+Trigger it manually from the Actions tab, or just push a `vX.Y.Z` tag (see
+"Versioning & releasing updates" below) and it attaches the built `.app`
+zips to that release automatically.
+
 ### Windows
 
 ```powershell

@@ -1,0 +1,74 @@
+# Builds real macOS .app bundles (full + Lite) using GitHub's own Mac
+# hardware -- PyInstaller can't cross-compile, so there's no way to produce
+# these from Windows/Linux directly, but this sidesteps that entirely: the
+# build runs on an actual Apple-Silicon Mac that GitHub provisions,
+# builds, and tears down for this one job, at no cost (public repos get
+# unlimited free Actions minutes on every runner OS, macOS included).
+#
+# Triggered manually (Actions tab -> this workflow -> "Run workflow"), or
+# automatically whenever a version tag (vX.Y.Z, see README.md's
+# "Versioning & releasing updates") is pushed -- in which case the built
+# .app zips are also attached to that tag's GitHub Release automatically,
+# not just left as a plain workflow artifact.
+name: Build macOS app
+
+on:
+  workflow_dispatch: {}
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: macos-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install Python dependencies
+        run: pip install -r requirements.txt
+
+      - name: Build full app
+        run: pyinstaller packaging/macos.spec
+
+      - name: Build Lite app
+        run: pyinstaller packaging/macos_lite.spec
+
+      - name: Zip both .app bundles
+        # ditto (not plain zip) is Apple's own recommended way to
+        # compress a .app bundle -- it preserves the bundle's resource
+        # forks/extended attributes correctly, which a naive `zip -r` can
+        # silently mangle.
+        run: |
+          cd dist
+          ditto -c -k --sequesterRsrc --keepParent PoliticianTradesTracker.app ../PoliticianTradesTracker-macOS.zip
+          ditto -c -k --sequesterRsrc --keepParent PoliticianTradesTrackerLite.app ../PoliticianTradesTrackerLite-macOS.zip
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: macos-builds
+          path: |
+            PoliticianTradesTracker-macOS.zip
+            PoliticianTradesTrackerLite-macOS.zip
+
+      # Only when this run was triggered by pushing a version tag (not a
+      # manual test run) -- attaches both zips directly to that tag's
+      # GitHub Release so they show up as normal downloads alongside the
+      # Windows builds, rather than only being reachable as a workflow
+      # artifact.
+      - name: Attach to release
+        if: startsWith(github.ref, 'refs/tags/')
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release upload "${{ github.ref_name }}" \
+            PoliticianTradesTracker-macOS.zip \
+            PoliticianTradesTrackerLite-macOS.zip \
+            --clobber
