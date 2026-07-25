@@ -6,6 +6,19 @@ All notable changes to this project are documented here. This project follows
 The current version lives in `backend/version.py` (`APP_VERSION`) -- see
 "Versioning & releasing updates" in README.md for the full release checklist.
 
+## [1.3.1] - 2026-07-25
+### Fixed
+- Lite's data-snapshot staleness check compared a GitHub release's
+  `published_at` field, which freezes to whenever the release was first
+  created and never updates on later asset re-uploads -- since the
+  publish job reuses the same fixed release forever rather than creating
+  a new one each time, every Lite install would have silently believed
+  it was always up to date after its very first sync, no matter how much
+  newer data got published afterward. Now compares each asset's own
+  `updated_at`, which genuinely changes on re-upload. v1.3.0's Lite builds
+  shipped with this bug; v1.3.1 is the first Lite build where auto-refresh
+  actually pulls newer snapshots as expected.
+
 ## [1.3.0] - 2026-07-25
 ### Added
 - **Politician Trade Tracker Lite**: a second, ~35MB build (versus the full
