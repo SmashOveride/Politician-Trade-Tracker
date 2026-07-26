@@ -91,6 +91,12 @@ datas = [
     (os.path.join(project_root, "frontend"), "frontend"),
 ]
 
+# Built by packaging/icon/build_icons.py from packaging/icon/final/app_icon_256.png
+# (the "capitol + uptrend arrow" design) -- checked into the repo since
+# rebuilding it needs a couple of extra pip packages nobody else building
+# the app should need to install.
+app_icon_path = os.path.join(project_root, "packaging", "icon", "final", "app_icon.ico")
+
 tesseract_vendor_dir = os.path.join(project_root, "packaging", "vendor", "tesseract-windows")
 if os.path.isdir(tesseract_vendor_dir):
     datas.append((tesseract_vendor_dir, "tesseract"))
@@ -144,7 +150,7 @@ exe = EXE(
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
-    icon=None,
+    icon=app_icon_path,
     version=_version_info_path,
 )
 

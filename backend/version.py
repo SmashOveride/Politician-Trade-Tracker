@@ -20,7 +20,7 @@ Follows semantic versioning (MAJOR.MINOR.PATCH):
 - PATCH: bug fixes, small tweaks, no new features.
 """
 
-APP_VERSION = "1.3.1"
+APP_VERSION = "1.3.2"
 
 # owner/repo on GitHub this app checks for updates against (via GitHub's
 # public Releases API) and which the "Update App" button links to.

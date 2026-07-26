@@ -6,6 +6,13 @@ All notable changes to this project are documented here. This project follows
 The current version lives in `backend/version.py` (`APP_VERSION`) -- see
 "Versioning & releasing updates" in README.md for the full release checklist.
 
+## [1.3.2] - 2026-07-26
+### Added
+- A real app icon (capitol dome + green uptrend arrow on a navy rounded
+  square) for both the Windows `.exe` and macOS `.app` builds, full and
+  Lite alike -- replaces the generic default icon PyInstaller used before.
+  Source art and build script live under `packaging/icon/`.
+
 ## [1.3.1] - 2026-07-25
 ### Fixed
 - Lite's data-snapshot staleness check compared a GitHub release's

@@ -35,6 +35,14 @@ project_root = os.path.abspath(os.path.join(SPECPATH, os.pardir))
 sys.path.insert(0, project_root)
 from backend.version import APP_VERSION  # noqa: E402
 
+# Built by packaging/icon/build_icons.py from packaging/icon/final/app_icon_256.png
+# (the "capitol + uptrend arrow" design) -- checked into the repo since
+# rebuilding it needs a couple of extra pip packages nobody else building
+# the app should need to install. This is what actually shows up as the
+# .app bundle's Finder/Dock icon (set via BUNDLE()'s icon= below); EXE()'s
+# icon= just applies it to the raw Mach-O binary inside as well.
+app_icon_path = os.path.join(project_root, "packaging", "icon", "final", "app_icon.icns")
+
 a = Analysis(
     [os.path.join(project_root, "desktop.py")],
     pathex=[project_root],
@@ -74,7 +82,7 @@ exe = EXE(
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
-    icon=None,
+    icon=app_icon_path,
 )
 
 coll = COLLECT(
@@ -91,7 +99,7 @@ coll = COLLECT(
 app = BUNDLE(
     coll,
     name="PoliticianTradesTracker.app",
-    icon=None,
+    icon=app_icon_path,
     bundle_identifier="com.politiciantradestracker.app",
     info_plist={
         # No native window is ever shown (the app opens a browser tab

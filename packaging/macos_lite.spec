@@ -22,6 +22,10 @@ project_root = os.path.abspath(os.path.join(SPECPATH, os.pardir))
 sys.path.insert(0, project_root)
 from backend.version import APP_VERSION  # noqa: E402
 
+# See packaging/macos.spec's identical line -- built by
+# packaging/icon/build_icons.py.
+app_icon_path = os.path.join(project_root, "packaging", "icon", "final", "app_icon.icns")
+
 a = Analysis(
     [os.path.join(project_root, "desktop.py")],
     pathex=[project_root],
@@ -73,7 +77,7 @@ exe = EXE(
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
-    icon=None,
+    icon=app_icon_path,
 )
 
 coll = COLLECT(
@@ -90,7 +94,7 @@ coll = COLLECT(
 app = BUNDLE(
     coll,
     name="PoliticianTradesTrackerLite.app",
-    icon=None,
+    icon=app_icon_path,
     bundle_identifier="com.politiciantradestrackerlite.app",
     info_plist={
         "LSUIElement": True,

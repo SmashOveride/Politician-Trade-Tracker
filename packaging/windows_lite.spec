@@ -81,6 +81,9 @@ datas = [
     (os.path.join(project_root, "frontend"), "frontend"),
 ]
 
+# See windows.spec's identical line -- built by packaging/icon/build_icons.py.
+app_icon_path = os.path.join(project_root, "packaging", "icon", "final", "app_icon.ico")
+
 a = Analysis(
     [os.path.join(project_root, "desktop.py")],
     pathex=[project_root],
@@ -133,7 +136,7 @@ exe = EXE(
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
-    icon=None,
+    icon=app_icon_path,
     version=_version_info_path,
 )
 
