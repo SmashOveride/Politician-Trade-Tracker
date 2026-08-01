@@ -38,3 +38,25 @@ recheck_*.pdf
 # test happened to use.
 Politician Trade Tracker.zip
 Politician Trade Tracker/
+
+# Android (see android/README.md): app/src/main/python/ is generated fresh
+# from ../backend and ../frontend by the syncPythonSources Gradle task on
+# every build, not source. No Gradle wrapper is checked in either (see the
+# same README) -- CI provisions Gradle directly instead.
+android/app/src/main/python/
+android/gradlew
+android/gradlew.bat
+android/gradle/wrapper/gradle-wrapper.jar
+android/gradle/wrapper/gradle-wrapper.properties
+android/.gradle/
+android/local.properties
+android/app/build/
+android/build/
+
+# Android release signing keystore -- generated once locally per the root
+# README's "Android build & signing" section, uploaded to GitHub Actions as
+# a base64 secret, and never committed (it's a private credential, and the
+# sole signing identity for every sideloaded release once the first one
+# ships).
+android/**/*.keystore
+android/**/*.jks

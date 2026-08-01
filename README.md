@@ -390,6 +390,51 @@ needed.
 Build once on each target OS you want to support (PyInstaller does not
 cross-compile).
 
+### Android (Lite only)
+
+Unlike the three builds above, there's no PyInstaller involved -- the
+`android/` folder is a separate Chaquopy-based Android Studio/Gradle project
+that embeds a real Python interpreter, runs the exact same Flask backend
+on-device against Android's private app storage, and displays the existing
+`frontend/` in a WebView. Only the **Lite** data path applies (the prebuilt
+snapshot download described above, not the live PDF/OCR pipeline) -- see
+`android/README.md` for how it reuses `backend/`/`frontend/` without forking
+them.
+
+This is distributed as a **sideloaded APK**, not through the Google Play
+Store -- same philosophy as the desktop builds (no account, no installer
+beyond "allow this one app," runs entirely on your own device).
+
+**Don't have Android Studio?** `.github/workflows/build-android.yml` builds
+the APK entirely on GitHub's own Ubuntu runners (which ship a preinstalled
+Android SDK), the same way `build-macos.yml` builds macOS binaries on a
+GitHub-hosted Mac. Trigger it manually from the Actions tab for an unsigned
+debug APK, or push a `vX.Y.Z` tag (see "Versioning & releasing updates"
+below) to also build a signed release APK and attach it to that release.
+
+**One-time signing setup**, needed before the first tagged release (there's
+no Play App Signing safety net for a sideloaded app, so back this keystore
+up somewhere safe -- losing it breaks update continuity for anyone who
+already installed a prior version):
+
+```bash
+keytool -genkeypair -v -keystore release.keystore -alias politician-trades \
+  -keyalg RSA -keysize 2048 -validity 10000
+base64 -w0 release.keystore > release.keystore.b64   # macOS: base64 -i release.keystore
+```
+
+Add the contents of `release.keystore.b64`, plus the alias and both
+passwords you were prompted for, as four GitHub Actions repo secrets:
+`ANDROID_KEYSTORE_BASE64`, `ANDROID_KEYSTORE_PASSWORD`, `ANDROID_KEY_ALIAS`,
+`ANDROID_KEY_PASSWORD`.
+
+**Installing the APK:** since it's self-signed rather than Play Store
+distributed, Android will very likely show a "Play Protect can't verify this
+app" (or similar "unknown developer") warning on install -- this is
+expected for any sideloaded app, not a sign of a problem, and there's no
+equivalent-cost fix short of enrolling in Google Play. Tap through it the
+same way you would for any other sideloaded APK you trust the source of.
+
 ## Antivirus / SmartScreen false positives
 
 Like most unsigned PyInstaller-built desktop apps, a freshly built
@@ -475,7 +520,8 @@ politician-trades-app/
 ├── CHANGELOG.md             # version history -- see "Versioning & releasing updates" below
 ├── backend/
 │   ├── app.py              # Flask REST API + static file serving
-│   ├── launcher.py          # single-instance + fixed-port launch logic
+│   ├── launcher.py          # single-instance + fixed-port launch logic (desktop only)
+│   ├── android_entry.py     # Android-only bootstrap, called from Kotlin via Chaquopy
 │   ├── db.py                # SQLite schema + connection helper
 │   ├── data_fetch.py        # runtime ingestion orchestration (legislators, committees, trade pipeline)
 │   ├── normalize.py         # shared amount/date/name normalization helpers
@@ -507,6 +553,12 @@ politician-trades-app/
 │   ├── macos.spec           # PyInstaller spec for macOS
 │   ├── windows.spec         # PyInstaller spec for Windows
 │   └── linux.spec           # PyInstaller spec for Linux
+├── android/                 # Chaquopy/Gradle project for the sideloaded Android (Lite) APK
+│   └── app/
+│       ├── build.gradle.kts     # Chaquopy config + syncPythonSources task (reuses backend/frontend as-is)
+│       └── src/main/kotlin/com/smashoveride/ptt/
+│           ├── MainActivity.kt       # WebView shell
+│           └── PythonServerService.kt # foreground service hosting the Flask server
 └── data/                    # created at runtime (gitignored)
     ├── politicians.db       # the whole app's data -- persists across restarts
     ├── server_info.json     # records which port the running instance is on
@@ -636,13 +688,17 @@ To cut a new release:
    following the existing format (`## [X.Y.Z] - YYYY-MM-DD`, with
    `### Added` / `### Changed` / `### Fixed` subsections as needed).
 3. Commit those changes, then tag the commit to match
-   (`git tag vX.Y.Z && git push --tags`).
+   (`git tag vX.Y.Z && git push --tags`) -- this triggers both
+   `build-macos.yml` and `build-android.yml`.
 4. Publish a [GitHub Release](https://github.com/SmashOveride/Politician-Trade-Tracker/releases/new)
-   from that tag, pasting in the same changelog entry as the release notes,
-   and attach the built executables/zips for each platform if you have them
-   -- ideally signed (see "Antivirus / SmartScreen false positives" above),
-   and with each attached file's SHA-256 checksum pasted into the release
-   notes either way.
+   from that tag, pasting in the same changelog entry as the release notes.
+   Once the release exists, re-run the two workflows above from the Actions
+   tab if they finished before you published it (their "attach to release"
+   step needs the release to already exist) -- they'll attach the macOS/Lite
+   zips and the signed Android APK automatically. Attach the
+   Windows/Linux builds by hand, ideally signed (see "Antivirus /
+   SmartScreen false positives" above), with each attached file's SHA-256
+   checksum pasted into the release notes either way.
 
 Once the release is published, every running copy of the app will notice
 it (within an hour, due to caching) via the "Update App" button turning

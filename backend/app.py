@@ -1817,6 +1817,13 @@ def clear_all_data():
 
 @app.route("/api/server/restart", methods=["POST"])
 def restart_server():
+    # Both this and shutdown_server() below end with os._exit(0) (see
+    # launcher.request_restart/request_shutdown), which on Android would
+    # kill the whole app process, not just the Python server -- there's no
+    # separate OS process to relaunch. Refuse instead of doing that.
+    if os.environ.get("POLITICIAN_TRADES_ANDROID"):
+        return jsonify({"error": "Not supported on Android"}), 404
+
     from .launcher import request_restart
 
     request_restart()
@@ -1825,6 +1832,9 @@ def restart_server():
 
 @app.route("/api/server/shutdown", methods=["POST"])
 def shutdown_server():
+    if os.environ.get("POLITICIAN_TRADES_ANDROID"):
+        return jsonify({"error": "Not supported on Android"}), 404
+
     from .launcher import request_shutdown
 
     request_shutdown()

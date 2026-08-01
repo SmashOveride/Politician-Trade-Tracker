@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Parent theme ships with the platform (androidx.appcompat isn't a
+         dependency here since the app is a single WebView Activity with no
+         other UI chrome) -- Theme.Material.Light.NoActionBar keeps the
+         WebView full-screen without an app bar on top of it. -->
+    <style name="Theme.PoliticianTradesTracker" parent="android:Theme.Material.Light.NoActionBar" />
+</resources>

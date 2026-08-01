@@ -26,8 +26,18 @@ SCHEMA_VERSION = 1
 # Where the .db file lives. When packaged with PyInstaller we want it to sit
 # next to the executable so users can see/back up their data; during normal
 # `python run.py` development it just lives in the project's data/ folder.
+# On Android (see backend/android_entry.py) there's no executable path or
+# project folder to speak of -- only the app's private storage directory,
+# handed to us by the Java/Kotlin side -- so that path takes priority over
+# both of the desktop cases whenever it's set.
 def get_data_dir():
     import sys
+
+    android_dir = os.environ.get("POLITICIAN_TRADES_DATA_DIR")
+    if android_dir:
+        data_dir = os.path.join(android_dir, "data")
+        os.makedirs(data_dir, exist_ok=True)
+        return data_dir
 
     if getattr(sys, "frozen", False):
         base = os.path.dirname(sys.executable)

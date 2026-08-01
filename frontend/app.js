@@ -1290,8 +1290,18 @@ function wireHeaderEvents() {
     closeSettingsMenu();
     openApisModal();
   });
-  document.getElementById('settings-menu-restart').addEventListener('click', restartServer);
-  document.getElementById('settings-menu-shutdown').addEventListener('click', shutdownServer);
+  // The Android build runs the server in-process (killing it would kill the
+  // whole app, not just restart a server process) -- see
+  // backend/app.py's restart_server()/shutdown_server(), which already
+  // refuse these requests there. Hide the controls entirely rather than
+  // let them fail silently.
+  if (navigator.userAgent.includes('PoliticianTradesAndroid')) {
+    document.getElementById('settings-menu-restart')?.remove();
+    document.getElementById('settings-menu-shutdown')?.remove();
+  } else {
+    document.getElementById('settings-menu-restart').addEventListener('click', restartServer);
+    document.getElementById('settings-menu-shutdown').addEventListener('click', shutdownServer);
+  }
   document.addEventListener('click', (e) => {
     const dropdown = document.querySelector('.settings-dropdown');
     if (dropdown && !dropdown.contains(e.target)) closeSettingsMenu();
